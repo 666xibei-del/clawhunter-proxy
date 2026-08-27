@@ -132,7 +132,7 @@ function getClientJS() {
   L.push("function removeImage() {");
   L.push("  refImage = null;");
   L.push("  var preview = document.getElementById('refPreview');");
-  L.push("  preview.innerHTML = '<p>Click or drag image here</p><p class=\\\\\"hint\\\\\">PNG, JPEG, WebP | Max 10MB</p>';");
+  L.push("  preview.innerHTML = '<p>Click or drag image here</p><p class=hint>PNG, JPEG, WebP | Max 10MB</p>';");
   L.push("  var inp = document.getElementById('imageInput');");
   L.push("  if (inp) inp.value = '';");
   L.push("  var btn = document.getElementById('genBtn');");
@@ -160,11 +160,14 @@ function getClientJS() {
   L.push("  var img = document.getElementById('lightboxImg');");
   L.push("  img.src = src;");
   L.push("  lb.style.display = 'flex';");
+  L.push("  requestAnimationFrame(function() { lb.classList.add('open'); });");
   L.push("  document.body.style.overflow = 'hidden';");
   L.push("}");
   L.push("");
   L.push("function closeLightbox() {");
-  L.push("  document.getElementById('lightbox').style.display = 'none';");
+  L.push("  var lb = document.getElementById('lightbox');");
+  L.push("  lb.classList.remove('open');");
+  L.push("  setTimeout(function() { lb.style.display = 'none'; }, 260);");
   L.push("  document.body.style.overflow = '';");
   L.push("}");
   L.push("");
@@ -320,12 +323,12 @@ function getHTML() {
     '.api-info{margin-top:24px;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:12px}',
     '.api-info h3{font-size:14px;margin-bottom:12px}',
     '.api-info pre{background:var(--bg);padding:12px;border-radius:8px;overflow-x:auto;font-size:12px;line-height:1.6}',
-    '.lightbox{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.92);cursor:zoom-out;animation:fadeIn .2s}',
+    '.lightbox{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.92);cursor:zoom-out;opacity:0;transition:opacity .25s ease}',
+    '.lightbox.open{display:flex;opacity:1}',
     '.lightbox img{max-width:92vw;max-height:92vh;object-fit:contain;border-radius:8px;box-shadow:0 0 80px rgba(0,0,0,.6)}',
-    '.lightbox-close{position:absolute;top:20px;right:20px;width:44px;height:44px;border:none;border-radius:50%;background:rgba(255,255,255,.1);color:white;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s}',
+    '.lightbox-close{position:absolute;top:20px;right:20px;width:44px;height:44px;border:none;border-radius:50%;background:rgba(255,255,255,.1);color:white;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s;z-index:1}',
     '.lightbox-close:hover{background:rgba(255,255,255,.25)}',
     '.lightbox-hint{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.4);font-size:12px}',
-    '@keyframes fadeIn{from{opacity:0}to{opacity:1}}',
     '</style></head><body>',
     '<header><h1>&#128062; <span>Claw Hunter</span> Free Image Gen</h1>',
     '<p>OpenAI Compatible API | 3 Free Models | Text-to-Image + Image-to-Image</p></header>',
@@ -358,9 +361,9 @@ function getHTML() {
     '<div class="api-info"><h3>&#128225; API Usage (Python)</h3>',
     '<pre><code>from openai import OpenAI\n\nclient = OpenAI(\n  base_url="https://YOUR-WORKER.workers.dev/v1",\n  api_key="your-key"\n)\n\n# Text-to-Image\nresp = client.images.generate(\n  model="gpt-image-2",\n  prompt="A cute cat", n=1\n)\n\n# Image-to-Image\nimport base64\nwith open("input.png", "rb") as f:\n  img_b64 = "data:image/png;base64," + base64.b64encode(f.read()).decode()\nresp = client.images.generate(\n  model="gpt-image-2",\n  prompt="Add sunglasses",\n  extra_body={"image": img_b64}\n)\nprint(resp.data[0].url)</code></pre></div></div>',
     '<div id="lightbox" onclick="closeLightbox()">',
-    '<button class="lightbox-close" onclick="closeLightbox()">&times;</button>',
-    '<img id="lightboxImg" src="" alt="Enlarged">',
-    '<div class="lightbox-hint">Click anywhere or press ESC to close</div>',
+    '<button class="lightbox-close" onclick="event.stopPropagation();closeLightbox()">&times;</button>',
+    '<img id="lightboxImg" src="" alt="Enlarged" onclick="event.stopPropagation()">',
+    '<div class="lightbox-hint">Click outside or press ESC to close</div>',
     '</div>',
     '<script src="/app.js"></script></body></html>'
   ].join("\n");
@@ -428,12 +431,26 @@ async function handleRequest(request, env) {
 
     var clawReq = { prompt: prompt, model: model, n: n, aspect_ratio: ar, quality: quality };
 
-    if (body.image) {
+    // Support multiple image formats: image, image_url, input_images, reference_images
+    var refImages = [];
+    if (body.image) refImages.push(body.image);
+    if (body.image_url) refImages.push(body.image_url);
+    if (body.input_images && Array.isArray(body.input_images)) {
+      refImages = refImages.concat(body.input_images);
+    }
+    if (body.reference_images && Array.isArray(body.reference_images)) {
+      refImages = refImages.concat(body.reference_images);
+    }
+    
+    if (refImages.length > 0) {
       var modelInfo = MODELS.find(function(m) { return m.id === model; });
       if (!modelInfo || !modelInfo.edit) {
         return errResp(400, "Model " + model + " does not support image editing. Use gpt-image-2 or nano-banana-2.");
       }
-      clawReq.reference_images = [body.image];
+      clawReq.image_url = refImages[0];
+      if (refImages.length > 1) {
+        clawReq.input_images = refImages;
+      }
     }
 
     for (var attempt = 0; attempt < 3; attempt++) {
