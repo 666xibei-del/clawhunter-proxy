@@ -9,14 +9,9 @@ var TOKEN_URL = BASE + "/api/v1/studio/token";
 var IMAGE_URL = BASE + "/api/studio/images";
 
 var MODELS = [
-  { id: "z-image-turbo",   name: "Z Image Turbo",   provider: "Alibaba",    cost: 0.005, tag: "Cheapest" },
-  { id: "seedream-5-lite",  name: "Seedream 5 Lite",  provider: "ByteDance",  cost: 0.015, tag: "Cheap+Edit" },
-  { id: "grok-imagine",     name: "Grok Imagine",     provider: "xAI",        cost: 0.015, tag: "Multi-style" },
-  { id: "flux-2-pro",       name: "FLUX 2 Pro",       provider: "BFL",        cost: 0.020, tag: "Best value" },
-  { id: "seedream-4-5",     name: "Seedream 4.5",     provider: "ByteDance",  cost: 0.020, tag: "Stable" },
-  { id: "recraft-v4",       name: "Recraft V4",       provider: "Recraft",    cost: 0.020, tag: "Design" },
-  { id: "qwen-image-2",     name: "Qwen Image 2",     provider: "Alibaba",    cost: 0.025, tag: "Prompt pro" },
-  { id: "hunyuan-image-3",  name: "Hunyuan Image 3",  provider: "Tencent",    cost: 0.025, tag: "Photoreal" }
+  { id: "gpt-image-2",     name: "GPT Image 2",     provider: "OpenAI",  cost: 0, tag: "FREE", freeRes: "1K" },
+  { id: "nano-banana-2",   name: "Nano Banana 2",   provider: "Google",  cost: 0, tag: "FREE", freeRes: "1K" },
+  { id: "kling-v3",        name: "Kling V3",        provider: "Kuaishou", cost: 0, tag: "FREE" }
 ];
 
 var pool = [];
@@ -76,10 +71,11 @@ function getClientJS() {
     "  var grid = document.getElementById(\"modelGrid\");",
     "  grid.innerHTML = MODELS.map(function(m) {",
     "    var active = m.id === selModel ? \" active\" : \"\";",
+    "    var badge = m.freeRes ? \" (\" + m.freeRes + \")\" : \"\";",
     "    return \"<button class=\\\"model-card\" + active + \"\\\" data-mid=\\\"\" + m.id + \"\\\">\" +",
-    "      \"<div class=\\\"mn\\\">\" + m.name + \"</div>\" +",
+    "      \"<div class=\\\"mn\\\">\" + m.name + badge + \"</div>\" +",
     "      \"<div class=\\\"mp\\\">\" + m.provider + \" - \" + m.tag + \"</div>\" +",
-    "      \"<div class=\\\"mc\\\">$\" + m.cost + \"/img</div></button>\";",
+    "      \"<div class=\\\"mc\\\">FREE</div></button>\";",
     "  }).join(\"\");",
     "}",
     "",
@@ -135,7 +131,7 @@ function getClientJS() {
     "      body: JSON.stringify({ model: selModel, prompt: prompt, n: 1, quality: selQ, size: size })",
     "    });",
     "    var data = await resp.json();",
-    "    if (data.error) throw new Error(data.error.message);",
+    "    if (data.error) throw new Error(data.error.message || data.error || \"Unknown error\");",
     "    if (data.data && data.data.length > 0) {",
     "      var url = data.data[0].url;",
     "      preview.innerHTML = \"<img src=\\\"\" + url + \"\\\" alt=\\\"Generated\\\">\";",
@@ -190,6 +186,7 @@ function getHTML() {
     '.model-card .mn{font-size:13px;font-weight:600}',
     '.model-card .mp{font-size:11px;color:var(--muted);margin-top:2px}',
     '.model-card .mc{font-size:11px;color:var(--green);font-weight:600}',
+    '.model-card .mn .free{color:var(--green);font-weight:700}',
     '.opts{display:flex;gap:8px;flex-wrap:wrap}',
     '.opt-btn{padding:6px 12px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text);font-size:12px;cursor:pointer}',
     '.opt-btn:hover{border-color:var(--accent)}',
@@ -213,7 +210,7 @@ function getHTML() {
     '.api-info pre{background:var(--bg);padding:12px;border-radius:8px;overflow-x:auto;font-size:12px;line-height:1.6}',
     '</style></head><body>',
     '<header><h1>&#128062; <span>Claw Hunter</span> Free Image Gen</h1>',
-    '<p>OpenAI Compatible API | 8 Free Models | CF Workers Global</p></header>',
+    '<p>OpenAI Compatible API | 3 Free Models | CF Workers Global</p></header>',
     '<div class="wrap"><div class="grid">',
     '<div class="panel"><h2>&#9997;&#65039; Input</h2>',
     '<div class="field"><label>Prompt</label><textarea id="prompt" placeholder="Describe the image you want to generate..."></textarea></div>',
@@ -322,6 +319,13 @@ async function handleRequest(request, env) {
 
         if (clawResp.ok) {
           var clawData = await clawResp.json();
+          if (clawData.error) {
+            var errMsg = typeof clawData.error === "string" ? clawData.error : (clawData.error.message || "Claw Hunter error");
+            var retry = clawData.retry_after_seconds || 0;
+            if (retry > 0) errMsg += " (retry in " + Math.ceil(retry / 60) + " min)";
+            if (attempt < 2) { await refreshPool(3); await new Promise(function(r) { setTimeout(r, 1000); }); continue; }
+            return errResp(429, errMsg);
+          }
           if (!clawData.images || !clawData.images.length) {
             return errResp(500, "No images returned");
           }
