@@ -159,15 +159,19 @@ function getClientJS() {
   L.push("  var lb = document.getElementById('lightbox');");
   L.push("  var img = document.getElementById('lightboxImg');");
   L.push("  img.src = src;");
-  L.push("  lb.style.display = 'flex';");
-  L.push("  requestAnimationFrame(function() { lb.classList.add('open'); });");
+  L.push("  lb.style.visibility = 'visible';");
+  L.push("  lb.style.pointerEvents = 'auto';");
+  L.push("  requestAnimationFrame(function() { lb.classList.add('visible'); });");
   L.push("  document.body.style.overflow = 'hidden';");
   L.push("}");
   L.push("");
   L.push("function closeLightbox() {");
   L.push("  var lb = document.getElementById('lightbox');");
-  L.push("  lb.classList.remove('open');");
-  L.push("  setTimeout(function() { lb.style.display = 'none'; }, 260);");
+  L.push("  lb.classList.remove('visible');");
+  L.push("  setTimeout(function() {");
+  L.push("    lb.style.visibility = 'hidden';");
+  L.push("    lb.style.pointerEvents = 'none';");
+  L.push("  }, 250);");
   L.push("  document.body.style.overflow = '';");
   L.push("}");
   L.push("");
@@ -323,8 +327,8 @@ function getHTML() {
     '.api-info{margin-top:24px;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:12px}',
     '.api-info h3{font-size:14px;margin-bottom:12px}',
     '.api-info pre{background:var(--bg);padding:12px;border-radius:8px;overflow-x:auto;font-size:12px;line-height:1.6}',
-    '.lightbox{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.92);cursor:zoom-out;opacity:0;transition:opacity .25s ease}',
-    '.lightbox.open{display:flex;opacity:1}',
+    '.lightbox{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.92);cursor:zoom-out;visibility:hidden;opacity:0;transition:opacity .2s ease}',
+    '.lightbox.visible{visibility:visible;opacity:1}',
     '.lightbox img{max-width:92vw;max-height:92vh;object-fit:contain;border-radius:8px;box-shadow:0 0 80px rgba(0,0,0,.6)}',
     '.lightbox-close{position:absolute;top:20px;right:20px;width:44px;height:44px;border:none;border-radius:50%;background:rgba(255,255,255,.1);color:white;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s;z-index:1}',
     '.lightbox-close:hover{background:rgba(255,255,255,.25)}',
@@ -363,7 +367,7 @@ function getHTML() {
     '<div id="lightbox" onclick="closeLightbox()">',
     '<button class="lightbox-close" onclick="event.stopPropagation();closeLightbox()">&times;</button>',
     '<img id="lightboxImg" src="" alt="Enlarged" onclick="event.stopPropagation()">',
-    '<div class="lightbox-hint">Click outside or press ESC to close</div>',
+    '<div class="lightbox-hint" onclick="closeLightbox()">Click outside or press ESC to close</div>',
     '</div>',
     '<script src="/app.js"></script></body></html>'
   ].join("\n");
