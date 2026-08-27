@@ -1,7 +1,7 @@
 /**
  * Claw Hunter Free Image API Proxy
  * Cloudflare Worker - Web UI + OpenAI API
- * Free-tier models only
+ * 3 free models only
  */
 
 var BASE = "https://clawhunter.fun";
@@ -59,103 +59,130 @@ function cors() {
   };
 }
 
-/* ─── Client-side JS (no single quotes in output) ─── */
+/* ─── Client-side JS ─── */
 
 function getClientJS() {
   var modelJSON = JSON.stringify(MODELS);
-  return [
-    "var MODELS = " + modelJSON + ";",
-    "var selModel = \"z-image-turbo\", selAR = \"1:1\", selQ = \"medium\";",
-    "",
-    "function renderModels() {",
-    "  var grid = document.getElementById(\"modelGrid\");",
-    "  grid.innerHTML = MODELS.map(function(m) {",
-    "    var active = m.id === selModel ? \" active\" : \"\";",
-    "    var badge = m.freeRes ? \" (\" + m.freeRes + \")\" : \"\";",
-    "    return \"<button class=\\\"model-card\" + active + \"\\\" data-mid=\\\"\" + m.id + \"\\\">\" +",
-    "      \"<div class=\\\"mn\\\">\" + m.name + badge + \"</div>\" +",
-    "      \"<div class=\\\"mp\\\">\" + m.provider + \" - \" + m.tag + \"</div>\" +",
-    "      \"<div class=\\\"mc\\\">FREE</div></button>\";",
-    "  }).join(\"\");",
-    "}",
-    "",
-    "function pickModel(id) {",
-    "  selModel = id;",
-    "  document.querySelectorAll(\".model-card\").forEach(function(el) {",
-    "    el.classList.toggle(\"active\", el.getAttribute(\"data-mid\") === id);",
-    "  });",
-    "}",
-    "",
-    "document.getElementById(\"arOpts\").addEventListener(\"click\", function(e) {",
-    "  var btn = e.target.closest(\".opt-btn\");",
-    "  if (!btn) return;",
-    "  selAR = btn.getAttribute(\"data-val\");",
-    "  document.querySelectorAll(\"#arOpts .opt-btn\").forEach(function(b) { b.classList.remove(\"active\"); });",
-    "  btn.classList.add(\"active\");",
-    "});",
-    "",
-    "document.getElementById(\"qOpts\").addEventListener(\"click\", function(e) {",
-    "  var btn = e.target.closest(\".opt-btn\");",
-    "  if (!btn) return;",
-    "  selQ = btn.getAttribute(\"data-val\");",
-    "  document.querySelectorAll(\"#qOpts .opt-btn\").forEach(function(b) { b.classList.remove(\"active\"); });",
-    "  btn.classList.add(\"active\");",
-    "});",
-    "",
-    "document.getElementById(\"modelGrid\").addEventListener(\"click\", function(e) {",
-    "  var card = e.target.closest(\".model-card\");",
-    "  if (!card) return;",
-    "  pickModel(card.getAttribute(\"data-mid\"));",
-    "});",
-    "",
-    "function showStatus(msg, type) {",
-    "  var el = document.getElementById(\"status\");",
-    "  el.textContent = msg;",
-    "  el.className = \"status show \" + type;",
-    "}",
-    "",
-    "async function generate() {",
-    "  var prompt = document.getElementById(\"prompt\").value.trim();",
-    "  if (!prompt) { showStatus(\"Please enter a prompt\", \"err\"); return; }",
-    "  var btn = document.getElementById(\"genBtn\");",
-    "  var preview = document.getElementById(\"preview\");",
-    "  btn.disabled = true;",
-    "  btn.innerHTML = \"Generating...\";",
-    "  preview.innerHTML = \"<div class=\\\"loading\\\"><div class=\\\"spinner\\\"></div></div>\";",
-    "  try {",
-    "    var sizeMap = {\"1:1\":\"1024x1024\",\"16:9\":\"1792x1024\",\"9:16\":\"1024x1792\",\"4:3\":\"1024x768\",\"3:4\":\"768x1024\"};",
-    "    var size = sizeMap[selAR] || \"1024x1024\";",
-    "    var resp = await fetch(\"/v1/images/generations\", {",
-    "      method: \"POST\",",
-    "      headers: {\"Content-Type\":\"application/json\",\"Authorization\":\"Bearer free\"},",
-    "      body: JSON.stringify({ model: selModel, prompt: prompt, n: 1, quality: selQ, size: size })",
-    "    });",
-    "    var data = await resp.json();",
-    "    if (data.error) throw new Error(data.error.message || data.error || \"Unknown error\");",
-    "    if (data.data && data.data.length > 0) {",
-    "      var url = data.data[0].url;",
-    "      preview.innerHTML = \"<img src=\\\"\" + url + \"\\\" alt=\\\"Generated\\\">\";",
-    "      var cost = resp.headers.get(\"X-Claw-Cost\") || \"0\";",
-    "      showStatus(\"OK! Cost: $\" + parseFloat(cost).toFixed(4) + \" | Model: \" + (resp.headers.get(\"X-Claw-Model\") || selModel), \"ok\");",
-    "    }",
-    "  } catch(e) {",
-    "    preview.innerHTML = \"<div class=\\\"placeholder\\\"><div class=\\\"icon\\\">Error</div><p>\" + e.message + \"</p></div>\";",
-    "    showStatus(\"Error: \" + e.message, \"err\");",
-    "  } finally {",
-    "    btn.disabled = false;",
-    "    btn.innerHTML = \"Generate\";",
-    "  }",
-    "}",
-    "",
-    "document.getElementById(\"prompt\").addEventListener(\"keydown\", function(e) {",
-    "  if (e.key === \"Enter\" && (e.ctrlKey || e.metaKey)) generate();",
-    "});",
-    "",
-    "renderModels();"
-  ].join("\n");
+  var lines = [];
+  lines.push("var MODELS = " + modelJSON + ";");
+  lines.push("var selModel = MODELS[0].id, selAR = '1:1', selQ = 'medium';");
+  lines.push("");
+  lines.push("function renderModels() {");
+  lines.push("  var grid = document.getElementById('modelGrid');");
+  lines.push("  grid.innerHTML = '';");
+  lines.push("  MODELS.forEach(function(m) {");
+  lines.push("    var btn = document.createElement('button');");
+  lines.push("    btn.className = 'model-card' + (m.id === selModel ? ' active' : '');");
+  lines.push("    btn.setAttribute('data-mid', m.id);");
+  lines.push("    var badge = m.freeRes ? ' (' + m.freeRes + ')' : '';");
+  lines.push("    var mn = document.createElement('div');");
+  lines.push("    mn.className = 'mn';");
+  lines.push("    mn.textContent = m.name + badge;");
+  lines.push("    btn.appendChild(mn);");
+  lines.push("    var mp = document.createElement('div');");
+  lines.push("    mp.className = 'mp';");
+  lines.push("    mp.textContent = m.provider + ' - ' + m.tag;");
+  lines.push("    btn.appendChild(mp);");
+  lines.push("    var mc = document.createElement('div');");
+  lines.push("    mc.className = 'mc';");
+  lines.push("    mc.textContent = 'FREE';");
+  lines.push("    btn.appendChild(mc);");
+  lines.push("    grid.appendChild(btn);");
+  lines.push("  });");
+  lines.push("}");
+  lines.push("");
+  lines.push("function pickModel(id) {");
+  lines.push("  selModel = id;");
+  lines.push("  document.querySelectorAll('.model-card').forEach(function(el) {");
+  lines.push("    el.classList.toggle('active', el.getAttribute('data-mid') === id);");
+  lines.push("  });");
+  lines.push("}");
+  lines.push("");
+  lines.push("document.getElementById('arOpts').addEventListener('click', function(e) {");
+  lines.push("  var btn = e.target.closest('.opt-btn');");
+  lines.push("  if (!btn) return;");
+  lines.push("  selAR = btn.getAttribute('data-val');");
+  lines.push("  document.querySelectorAll('#arOpts .opt-btn').forEach(function(b) { b.classList.remove('active'); });");
+  lines.push("  btn.classList.add('active');");
+  lines.push("});");
+  lines.push("");
+  lines.push("document.getElementById('qOpts').addEventListener('click', function(e) {");
+  lines.push("  var btn = e.target.closest('.opt-btn');");
+  lines.push("  if (!btn) return;");
+  lines.push("  selQ = btn.getAttribute('data-val');");
+  lines.push("  document.querySelectorAll('#qOpts .opt-btn').forEach(function(b) { b.classList.remove('active'); });");
+  lines.push("  btn.classList.add('active');");
+  lines.push("});");
+  lines.push("");
+  lines.push("document.getElementById('modelGrid').addEventListener('click', function(e) {");
+  lines.push("  var card = e.target.closest('.model-card');");
+  lines.push("  if (!card) return;");
+  lines.push("  pickModel(card.getAttribute('data-mid'));");
+  lines.push("});");
+  lines.push("");
+  lines.push("function showStatus(msg, type) {");
+  lines.push("  var el = document.getElementById('status');");
+  lines.push("  el.textContent = msg;");
+  lines.push("  el.className = 'status show ' + type;");
+  lines.push("}");
+  lines.push("");
+  lines.push("async function generate() {");
+  lines.push("  var prompt = document.getElementById('prompt').value.trim();");
+  lines.push("  if (!prompt) { showStatus('Please enter a prompt', 'err'); return; }");
+  lines.push("  var btn = document.getElementById('genBtn');");
+  lines.push("  var preview = document.getElementById('preview');");
+  lines.push("  btn.disabled = true;");
+  lines.push("  btn.innerHTML = 'Generating...';");
+  lines.push("  var loading = document.createElement('div');");
+  lines.push("  loading.className = 'loading';");
+  lines.push("  var spinner = document.createElement('div');");
+  lines.push("  spinner.className = 'spinner';");
+  lines.push("  loading.appendChild(spinner);");
+  lines.push("  preview.innerHTML = '';");
+  lines.push("  preview.appendChild(loading);");
+  lines.push("  try {");
+  lines.push("    var sizeMap = {'1:1':'1024x1024','16:9':'1792x1024','9:16':'1024x1792','4:3':'1024x768','3:4':'768x1024'};");
+  lines.push("    var size = sizeMap[selAR] || '1024x1024';");
+  lines.push("    var resp = await fetch('/v1/images/generations', {");
+  lines.push("      method: 'POST',");
+  lines.push("      headers: {'Content-Type':'application/json','Authorization':'Bearer free'},");
+  lines.push("      body: JSON.stringify({ model: selModel, prompt: prompt, n: 1, quality: selQ, size: size })");
+  lines.push("    });");
+  lines.push("    var data = await resp.json();");
+  lines.push("    if (data.error) throw new Error(data.error.message || data.error || 'Unknown error');");
+  lines.push("    if (data.data && data.data.length > 0) {");
+  lines.push("      var url = data.data[0].url;");
+  lines.push("      var img = document.createElement('img');");
+  lines.push("      img.src = url;");
+  lines.push("      img.alt = 'Generated';");
+  lines.push("      preview.innerHTML = '';");
+  lines.push("      preview.appendChild(img);");
+  lines.push("      var cost = resp.headers.get('X-Claw-Cost') || '0';");
+  lines.push("      showStatus('OK! Cost: $' + parseFloat(cost).toFixed(4) + ' | Model: ' + (resp.headers.get('X-Claw-Model') || selModel), 'ok');");
+  lines.push("    }");
+  lines.push("  } catch(e) {");
+  lines.push("    preview.innerHTML = '';");
+  lines.push("    var ph = document.createElement('div');");
+  lines.push("    ph.className = 'placeholder';");
+  lines.push("    ph.innerHTML = '<div class=\"icon\">Error</div><p>' + e.message + '</p>';");
+  lines.push("    preview.appendChild(ph);");
+  lines.push("    showStatus('Error: ' + e.message, 'err');");
+  lines.push("  } finally {");
+  lines.push("    btn.disabled = false;");
+  lines.push("    btn.innerHTML = 'Generate';");
+  lines.push("  }");
+  lines.push("}");
+  lines.push("");
+  lines.push("document.getElementById('genBtn').addEventListener('click', generate);");
+  lines.push("document.getElementById('prompt').addEventListener('keydown', function(e) {");
+  lines.push("  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) generate();");
+  lines.push("});");
+  lines.push("");
+  lines.push("renderModels();");
+  return lines.join("\n");
 }
 
-/* ─── HTML page (references /app.js) ─── */
+/* ─── HTML page ─── */
 
 function getHTML() {
   return [
@@ -186,7 +213,6 @@ function getHTML() {
     '.model-card .mn{font-size:13px;font-weight:600}',
     '.model-card .mp{font-size:11px;color:var(--muted);margin-top:2px}',
     '.model-card .mc{font-size:11px;color:var(--green);font-weight:600}',
-    '.model-card .mn .free{color:var(--green);font-weight:700}',
     '.opts{display:flex;gap:8px;flex-wrap:wrap}',
     '.opt-btn{padding:6px 12px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text);font-size:12px;cursor:pointer}',
     '.opt-btn:hover{border-color:var(--accent)}',
@@ -233,7 +259,7 @@ function getHTML() {
     '<div class="preview" id="preview"><div class="placeholder"><div class="icon">&#127912;</div><p>Enter prompt and click Generate</p></div></div>',
     '</div></div>',
     '<div class="api-info"><h3>&#128225; API Usage (Python)</h3>',
-    '<pre><code>from openai import OpenAI\n\nclient = OpenAI(\n  base_url="https://YOUR-WORKER.workers.dev/v1",\n  api_key="your-key"\n)\n\nresp = client.images.generate(\n  model="z-image-turbo",\n  prompt="A cute cat", n=1\n)\nprint(resp.data[0].url)</code></pre></div></div>',
+    '<pre><code>from openai import OpenAI\n\nclient = OpenAI(\n  base_url="https://YOUR-WORKER.workers.dev/v1",\n  api_key="your-key"\n)\n\nresp = client.images.generate(\n  model="gpt-image-2",\n  prompt="A cute cat", n=1\n)\nprint(resp.data[0].url)</code></pre></div></div>',
     '<script src="/app.js"></script></body></html>'
   ].join("\n");
 }
@@ -246,17 +272,14 @@ async function handleRequest(request, env) {
 
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: C });
 
-  // Web UI HTML
   if (url.pathname === "/") {
     return new Response(getHTML(), { headers: { "Content-Type": "text/html; charset=utf-8" } });
   }
 
-  // Client JS
   if (url.pathname === "/app.js") {
     return new Response(getClientJS(), { headers: { "Content-Type": "application/javascript; charset=utf-8" } });
   }
 
-  // Health check
   if (url.pathname === "/health") {
     try {
       await getToken();
@@ -266,13 +289,11 @@ async function handleRequest(request, env) {
     }
   }
 
-  // Admin: refresh token pool
   if (url.pathname === "/admin/refresh-tokens" && request.method === "POST") {
     await refreshPool(5);
     return jsonResp({ status: "ok", pool_size: pool.length }, 200, C);
   }
 
-  // List models (OpenAI compatible)
   if (url.pathname === "/v1/models") {
     var list = MODELS.map(function(m) {
       return { id: m.id, object: "model", owned_by: "clawhunter-free", pricing: { image: m.cost } };
@@ -280,12 +301,11 @@ async function handleRequest(request, env) {
     return jsonResp({ object: "list", data: list }, 200, C);
   }
 
-  // Image generation (OpenAI compatible)
   if (url.pathname === "/v1/images/generations" && request.method === "POST") {
     var body;
     try { body = await request.json(); } catch(e) { return errResp(400, "Invalid JSON body"); }
 
-    var model = body.model || "z-image-turbo";
+    var model = body.model || MODELS[0].id;
     var prompt = body.prompt;
     var n = Math.min(body.n || 1, 4);
     var quality = body.quality || "medium";
@@ -297,7 +317,6 @@ async function handleRequest(request, env) {
       return errResp(400, "Model not available. Free models: " + modelIds.join(", "));
     }
 
-    // Map OpenAI size to aspect ratio
     var ar = "1:1";
     if (body.size) {
       var wh = body.size.split("x").map(Number);
@@ -307,7 +326,6 @@ async function handleRequest(request, env) {
 
     var clawReq = { prompt: prompt, model: model, n: n, aspect_ratio: ar, quality: quality };
 
-    // Retry up to 3 times on 429
     for (var attempt = 0; attempt < 3; attempt++) {
       try {
         var tok = await getToken();
@@ -346,7 +364,6 @@ async function handleRequest(request, env) {
           }, C));
         }
 
-        // Rate limited - refresh token pool and retry
         if (clawResp.status === 429) {
           await refreshPool(3);
           await new Promise(function(r) { setTimeout(r, 500 * (attempt + 1)); });
