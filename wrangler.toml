@@ -1,0 +1,22 @@
+# Claw Hunter OpenAI 相容 API 代理
+# 部署: npx wrangler deploy
+
+name = "clawhunter-proxy"
+main = "src/index.js"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# 環境變量 (通過 wrangler secret 或此文件設置)
+# [vars]
+# API_KEYS = "sk-claw-123456,sk-claw-789012"  # 逗號分隔的 API Keys
+# RATE_LIMIT_PER_MINUTE = "10"
+
+# KV Namespace (用於 Rate Limiting，可選)
+# [[kv_namespaces]]
+# binding = "RATE_LIMIT_KV"
+# id = "your-kv-namespace-id"
+
+# 自定義域名 (可選)
+# [routes]
+# pattern = "api.yourdomain.com/*"
+# zone_name = "yourdomain.com"
