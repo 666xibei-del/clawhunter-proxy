@@ -1,15 +1,14 @@
-# 🐾 Claw Hunter → OpenAI 圖片生成 API 代理
+# 🐾 Claw Hunter → 免費圖片生成 API 代理
 
-將 Claw Hunter 的圖片生成 API 包裝為 OpenAI 相容格式，部署到 Cloudflare Workers (免費)。
+帶 Web UI 的免費圖片生成服務，部署到 Cloudflare Workers。
 
 ## ✨ 功能
 
-- ✅ **OpenAI 相容** - 直接替換 OpenAI SDK 的 baseURL
-- ✅ **API Key 認證** - 安全的 API Key 管理
-- ✅ **免費模型** - z-image-turbo ($0.005/張)
-- ✅ **Rate Limiting** - 可選的請求限制
-- ✅ **CORS 支持** - 跨域請求
-- ✅ **全球部署** - Cloudflare Workers 全球邊緣節點
+- ✅ **Web UI** - 瀏覽器直接使用，無需編程
+- ✅ **OpenAI 相容 API** - 可對接任何 OpenAI SDK
+- ✅ **僅免費模型** - 8 個免費/低價模型
+- ✅ **Token 輪換** - 自動繞過限流
+- ✅ **全球部署** - CF Workers 全球邊緣節點
 
 ## 🚀 快速部署
 
@@ -105,21 +104,18 @@ curl -X POST https://clawhunter-proxy.your-subdomain.workers.dev/v1/images/gener
 
 ## 📋 支持的模型
 
-| 模型 ID | 名稱 | 價格/張 | 特點 |
-|---|---|---|---|
-| `z-image-turbo` | Z Image Turbo | $0.005 | 最便宜 |
-| `nano-banana-2` | Nano Banana 2 | $0.035 | Google 專業品質 |
-| `gpt-image-2` | GPT Image 2 | $0.011~ | OpenAI 頂級 |
-| `flux-2-pro` | FLUX 2 Pro | $0.02 | 性價比高 |
-| `seedream-4-5` | Seedream 4.5 | $0.02 | 編輯支持 |
-| `grok-imagine` | Grok Imagine | $0.015 | xAI 多風格 |
-| `qwen-image-2` | Qwen Image 2 | $0.025 | 提示詞遵循 |
-| `hunyuan-image-3` | Hunyuan Image 3 | $0.025 | 真實場景 |
-| `recraft-v4` | Recraft V4 | $0.02 | 設計風格 |
-| `gpt-image-1-5` | GPT Image 1.5 | $0.04 | 文字渲染 |
-| `flux-2-max` | FLUX 2 Max | $0.04 | FLUX 最高 |
-| `nano-banana-pro` | Nano Banana Pro | $0.07 | Google 旗艦 |
-| `seedream-5-lite` | Seedream 5 Lite | $0.015 | 低價編輯 |
+| 模型 ID | 名稱 | 供應商 | 價格/張 | 特點 |
+|---|---|---|---|---|
+| `z-image-turbo` | Z Image Turbo | Alibaba | $0.005 | 最便宜·快速 |
+| `seedream-5-lite` | Seedream 5 Lite | ByteDance | $0.015 | 低價·支持編輯 |
+| `grok-imagine` | Grok Imagine | xAI | $0.015 | 多風格·可調解析度 |
+| `flux-2-pro` | FLUX 2 Pro | BFL | $0.02 | 性價比高 |
+| `seedream-4-5` | Seedream 4.5 | ByteDance | $0.02 | 穩定·支持編輯 |
+| `recraft-v4` | Recraft V4 | Recraft | $0.02 | 設計風格 |
+| `qwen-image-2` | Qwen Image 2 | Alibaba | $0.025 | 提示詞遵循 |
+| `hunyuan-image-3` | Hunyuan Image 3 | Tencent | $0.025 | 真實場景 |
+
+> 所有模型均為免費/低價層，訪客每日有免費額度
 
 ## ⚙️ 配置選項
 
