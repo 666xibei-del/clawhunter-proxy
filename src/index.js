@@ -31,13 +31,19 @@ async function getToken() {
 }
 
 async function refreshPool(count) {
-  for (var i = 0; i < (count || 3); i++) {
-    try {
-      var r = await fetch(TOKEN_URL);
-      var d = await r.json();
-      pool.push({ tok: d.token, exp: d.expiresAt, used: 0 });
-    } catch(e) {}
+  var n = count || 5;
+  var promises = [];
+  for (var i = 0; i < n; i++) {
+    promises.push(
+      fetch(TOKEN_URL)
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          pool.push({ tok: d.token, exp: d.expiresAt, used: 0 });
+        })
+        .catch(function() {})
+    );
   }
+  await Promise.all(promises);
 }
 
 function jsonResp(data, code, headers) {
@@ -245,9 +251,7 @@ function getClientJS() {
   L.push("  preview.innerHTML = '';");
   L.push("  preview.appendChild(loading);");
   L.push("  try {");
-  L.push("    var sizeMap = {'1:1':'1024x1024','16:9':'1792x1024','9:16':'1024x1792','4:3':'1024x768','3:4':'768x1024'};");
-  L.push("    var size = sizeMap[selAR] || '1024x1024';");
-  L.push("    var reqBody = { model: selModel, prompt: prompt, n: 1, quality: selQ, size: size };");
+  L.push("    var reqBody = { model: selModel, prompt: prompt, n: 1, quality: selQ, aspect_ratio: selAR };");
   L.push("    if (refImage) reqBody.image = refImage;");
   L.push("    var resp = await fetch('/v1/images/generations', {");
   L.push("      method: 'POST',");
@@ -255,7 +259,7 @@ function getClientJS() {
   L.push("      body: JSON.stringify(reqBody)");
   L.push("    });");
   L.push("    var data = await resp.json();");
-  L.push("    if (data.error) throw new Error(data.error.message || data.error || 'Unknown error');");
+  L.push("    if (data.error) { var em = (typeof data.error === 'string') ? data.error : (data.error.message || JSON.stringify(data.error) || 'Unknown error'); throw new Error(em); }");
   L.push("    if (data.data && data.data.length > 0) {");
   L.push("      var url = data.data[0].url;");
   L.push("      var img = document.createElement('img');");
@@ -449,11 +453,17 @@ async function handleRequest(request, env) {
       return errResp(400, "Model not available. Free models: " + modelIds.join(", "));
     }
 
-    var ar = "1:1";
-    if (body.size) {
+    var ar = body.aspect_ratio || "1:1";
+    // Backward compat: convert size string to aspect_ratio
+    if (!body.aspect_ratio && body.size) {
       var wh = body.size.split("x").map(Number);
-      if (wh[0] > wh[1]) ar = "16:9";
-      else if (wh[0] < wh[1]) ar = "9:16";
+      if (wh[0] === wh[1]) ar = "1:1";
+      else if (wh[0] === 1792 && wh[1] === 1024) ar = "16:9";
+      else if (wh[0] === 1024 && wh[1] === 1792) ar = "9:16";
+      else if (wh[0] === 1024 && wh[1] === 768) ar = "4:3";
+      else if (wh[0] === 768 && wh[1] === 1024) ar = "3:4";
+      else if (wh[0] > wh[1]) ar = "16:9";
+      else ar = "9:16";
     }
 
     var clawReq = { prompt: prompt, model: model, n: n, aspect_ratio: ar, quality: quality };
@@ -480,8 +490,12 @@ async function handleRequest(request, env) {
       }
     }
 
-    for (var attempt = 0; attempt < 3; attempt++) {
+    var MAX_ATTEMPTS = 6;
+    var lastErr = null;
+    for (var attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       try {
+        // Refresh token pool before each attempt
+        if (pool.length < 3) await refreshPool(5);
         var tok = await getToken();
         var clawResp = await fetch(IMAGE_URL, {
           method: "POST",
@@ -493,9 +507,20 @@ async function handleRequest(request, env) {
           var clawData = await clawResp.json();
           if (clawData.error) {
             var errMsg = typeof clawData.error === "string" ? clawData.error : (clawData.error.message || "Claw Hunter error");
-            var retry = clawData.retry_after_seconds || 0;
-            if (retry > 0) errMsg += " (retry in " + Math.ceil(retry / 60) + " min)";
-            if (attempt < 2) { await refreshPool(3); await new Promise(function(r) { setTimeout(r, 1000); }); continue; }
+            var retrySec = clawData.retry_after_seconds || 0;
+            lastErr = errMsg;
+            // Daily limit exhausted - no point retrying
+            if (errMsg.indexOf("daily") !== -1 || errMsg.indexOf("limit reached") !== -1) {
+              if (retrySec > 0) errMsg += " (resets in " + Math.ceil(retrySec / 3600) + "h)";
+              return errResp(429, errMsg);
+            }
+            // Temporary rate limit - wait and retry
+            var waitMs = retrySec > 0 ? Math.min(retrySec * 1000, 30000) : Math.min(2000 * Math.pow(2, attempt), 20000);
+            if (attempt < MAX_ATTEMPTS - 1) {
+              await refreshPool(5);
+              await new Promise(function(r) { setTimeout(r, waitMs); });
+              continue;
+            }
             return errResp(429, errMsg);
           }
           if (!clawData.images || !clawData.images.length) {
@@ -519,20 +544,36 @@ async function handleRequest(request, env) {
         }
 
         if (clawResp.status === 429) {
-          await refreshPool(3);
-          await new Promise(function(r) { setTimeout(r, 500 * (attempt + 1)); });
-          continue;
+          // Check response body for retry_after info
+          var errBody429 = await clawResp.json().catch(function() { return {}; });
+          var msg429 = (errBody429.error && errBody429.error.message) || "";
+          var retrySec429 = errBody429.retry_after_seconds || 0;
+          lastErr = msg429 || "Rate limited";
+          // Daily limit - don't retry
+          if (msg429.indexOf("daily") !== -1 || msg429.indexOf("limit reached") !== -1) {
+            var hint = retrySec429 > 0 ? " (resets in " + Math.ceil(retrySec429 / 3600) + "h)" : "";
+            return errResp(429, msg429 + hint);
+          }
+          // Temporary - wait and retry with exponential backoff
+          var waitMs429 = retrySec429 > 0 ? Math.min(retrySec429 * 1000, 30000) : Math.min(2000 * Math.pow(2, attempt), 20000);
+          if (attempt < MAX_ATTEMPTS - 1) {
+            await refreshPool(5);
+            await new Promise(function(r) { setTimeout(r, waitMs429); });
+            continue;
+          }
+          return errResp(429, lastErr);
         }
 
         var errBody = await clawResp.json().catch(function() { return {}; });
-        return errResp(clawResp.status, errBody.error || "Claw Hunter API error");
+        var upstreamMsg = (typeof errBody.error === 'string') ? errBody.error : (errBody.error && errBody.error.message) || errBody.error || errBody.message || 'Claw Hunter API error (HTTP ' + clawResp.status + ')';
+        return errResp(clawResp.status, upstreamMsg);
 
       } catch(e) {
         return errResp(500, "Internal error: " + e.message);
       }
     }
 
-    return errResp(429, "Rate limited after retries. Try again later.");
+    return errResp(429, lastErr || "Rate limited after retries. Try again later.");
   }
 
   return errResp(404, "Not found");
