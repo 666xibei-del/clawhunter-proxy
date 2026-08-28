@@ -12,9 +12,12 @@ OpenAI Compatible API Proxy with Web UI, deployed on Cloudflare Workers.
 - ✅ **Text-to-Image** - Describe what you want / 文生圖
 - ✅ **Image-to-Image** - Upload reference image for edit / 圖生圖（上傳參考圖片）
 - ✅ **Drag & Drop** - Drag images to upload / 拖拽上傳
-- ✅ **Image Zoom** - Click to enlarge / 點擊放大
+- ✅ **Image Zoom (Lightbox)** - Click to enlarge any image / 點擊放大圖片
+- ✅ **Aspect Ratio Selection** - 1:1, 16:9, 9:16, 4:3, 3:4 / 選擇寬高比
 - ✅ **3 Free Models** - All completely free / 3 個完全免費模型
+- ✅ **Token Pool** - Auto-refresh with retry on rate limit / 自動刷新 Token + 限流重試
 - ✅ **Global CDN** - CF Workers 200+ edge nodes / 全球邊緣節點
+- ✅ **Dark Theme** - Modern dark UI / 現代暗色主題
 
 ---
 
@@ -40,11 +43,13 @@ Your Worker URL will be:
 
 ## 📋 Supported Models / 支持的模型
 
-| Model | Provider | Text-to-Image | Image-to-Image | Price |
+| Model | Provider | Text-to-Image | Image-to-Image | Free Tier |
 |---|---|---|---|---|
-| `gpt-image-2` | OpenAI | ✅ | ✅ | **FREE** (1K) |
-| `nano-banana-2` | Google | ✅ | ✅ | **FREE** (1K) |
-| `kling-v3` | Kuaishou | ✅ | ❌ | **FREE** |
+| `gpt-image-2` | OpenAI | ✅ | ✅ | **FREE** (1K daily) |
+| `nano-banana-2` | Google | ✅ | ✅ | **FREE** (1K daily) |
+| `kling-v3` | Kuaishou | ✅ | ❌ | **FREE** (daily limit) |
+
+> 所有模型均支持訪客免費層，每日有免費額度限制。
 
 ---
 
@@ -61,9 +66,11 @@ https://clawhunter-proxy.YOUR-SUBDOMAIN.workers.dev
 
 1. Enter prompt / 輸入提示詞
 2. Select model / 選擇模型
-3. (Optional) Upload reference image for edit / （可選）上傳參考圖片
-4. Click Generate / 點擊生成
-5. **Click image to zoom** / **點擊圖片放大**
+3. Choose aspect ratio / 選擇寬高比 (1:1, 16:9, 9:16, 4:3, 3:4)
+4. Choose quality / 選擇品質 (Low, Medium, High)
+5. (Optional) Upload reference image for edit / （可選）上傳參考圖片
+6. Click Generate / 點擊生成
+7. **Click image to zoom** / **點擊圖片放大**
 
 ### Image Upload / 圖片上傳
 
@@ -104,6 +111,15 @@ response = client.images.generate(
     extra_body={"image": img_b64}
 )
 print(response.data[0].url)
+
+# With aspect ratio / 指定比例
+response = client.images.generate(
+    model="gpt-image-2",
+    prompt="A wide landscape",
+    n=1,
+    extra_body={"aspect_ratio": "16:9"}
+)
+print(response.data[0].url)
 ```
 
 ### Node.js
@@ -124,6 +140,15 @@ const response = await client.images.generate({
   size: '1024x1024'
 });
 console.log(response.data[0].url);
+
+// With aspect ratio / 指定比例
+const wide = await client.images.generate({
+  model: 'gpt-image-2',
+  prompt: 'A wide landscape',
+  n: 1,
+  extra_body: { aspect_ratio: '16:9' }
+});
+console.log(wide.data[0].url);
 ```
 
 ### curl
@@ -136,7 +161,7 @@ curl -X POST https://clawhunter-proxy.YOUR-SUBDOMAIN.workers.dev/v1/images/gener
     "model": "gpt-image-2",
     "prompt": "A cute orange cat",
     "n": 1,
-    "size": "1024x1024"
+    "aspect_ratio": "1:1"
   }'
 
 # Image-to-Image / 圖生圖
@@ -147,6 +172,16 @@ curl -X POST https://clawhunter-proxy.YOUR-SUBDOMAIN.workers.dev/v1/images/gener
     "prompt": "Add sunglasses",
     "n": 1,
     "image": "data:image/png;base64,...BASE64_DATA..."
+  }'
+
+# 16:9 Widescreen / 寬屏
+curl -X POST https://clawhunter-proxy.YOUR-SUBDOMAIN.workers.dev/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nano-banana-2",
+    "prompt": "A sunset over the ocean",
+    "n": 1,
+    "aspect_ratio": "16:9"
   }'
 ```
 
@@ -163,12 +198,25 @@ curl -X POST https://clawhunter-proxy.YOUR-SUBDOMAIN.workers.dev/v1/images/gener
 | `POST` | `/v1/images/generations` | Generate image / 圖片生成 |
 | `POST` | `/admin/refresh-tokens` | Refresh token pool |
 
+### Request Parameters / 請求參數
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `model` | string | `gpt-image-2` | Model ID |
+| `prompt` | string | **required** | Image description |
+| `n` | int | 1 | Number of images (1-4) |
+| `quality` | string | `medium` | `low`, `medium`, `high` |
+| `aspect_ratio` | string | `1:1` | `1:1`, `16:9`, `9:16`, `4:3`, `3:4` |
+| `image` | string | — | Base64 data URL for image editing |
+| `input_images` | string[] | — | Multiple reference images (max 8) |
+| `reference_images` | string[] | — | Studio API format (max 4) |
+
 ---
 
 ## 🔄 How It Works / 工作原理
 
 ```
-User Request
+User Request → Web UI or API
     ↓
 CF Worker (your-worker.workers.dev)
     ↓
@@ -176,8 +224,23 @@ Fetch Token → GET /api/v1/studio/token
     ↓
 Generate Image → POST /api/studio/images
     ↓
-Return Result
+Auto-retry on 429 (exponential backoff)
+    ↓
+Return Result (base64 or URL)
 ```
+
+### Token Pool Management / Token 池管理
+
+- Pool of 5 tokens, auto-refreshed / 5 個 Token 自動輪換
+- Proactive refill when pool < 3 / 池不足時自動補充
+- Parallel token fetching (Promise.all) / 並行刷新
+
+### Retry Strategy / 重試策略
+
+- Max 6 attempts per request / 每次請求最多 6 次重試
+- Exponential backoff: 2s → 4s → 8s → 16s → 20s / 指數退避
+- Daily limit detection: stops early if quota exhausted / 偵測每日配額用完
+- Respects `retry_after_seconds` from upstream / 尊重上游重試時間
 
 ### IP Rotation / IP 輪換
 
@@ -191,13 +254,14 @@ Return Result
 
 | Feature | Description |
 |---|---|
-| **Lightbox** | Click any image to zoom in / 點擊圖片放大 |
+| **Lightbox** | Click any image to zoom in full-screen / 點擊圖片全屏放大 |
 | **Drag & Drop** | Drag images to upload zone / 拖拽圖片上傳 |
 | **Model Selector** | Switch between 3 free models / 切換 3 個免費模型 |
 | **Aspect Ratio** | 1:1, 16:9, 9:16, 4:3, 3:4 / 選擇寬高比 |
 | **Quality** | Low, Medium, High / 選擇品質 |
 | **Status Bar** | Shows cost and model info / 顯示價格和模型信息 |
 | **Keyboard Shortcuts** | Ctrl+Enter to generate / Ctrl+Enter 快速生成 |
+| **Error Messages** | Shows specific upstream errors / 顯示具體上游錯誤信息 |
 
 ---
 
@@ -206,8 +270,9 @@ Return Result
 1. **Free Tier**: Claw Hunter has daily free limits per IP / 每 IP 每日免費額度有限
 2. **CF Workers Free**: 100K requests/day / 免費版 10 萬次/天
 3. **Token Pool**: Auto-maintained, 12h expiry / 自動維護，12 小時過期
-4. **Image Size**: Results may be large (100KB-1MB) / 返回圖片可能較大
+4. **Image Size**: Results may be large (100KB-3MB) / 返回圖片可能較大
 5. **Upload Limit**: Max 10MB per image, max 4 images / 每張最大 10MB，最多 4 張
+6. **Rate Limit**: Auto-retry with backoff, shows reset time / 自動重試+退避，顯示重置時間
 
 ---
 
@@ -215,11 +280,12 @@ Return Result
 
 ```
 clawhunter-proxy/
-├── src/index.js      # Worker code (450 lines)
+├── src/index.js      # Worker code (590 lines) - HTML/CSS/JS + API proxy
 ├── wrangler.toml     # CF Workers config
 ├── package.json      # Dependencies
 ├── deploy.sh         # Deploy script
 ├── test.py           # API test script
+├── batch_generate.py # Batch generation script
 └── README.md         # This file
 ```
 

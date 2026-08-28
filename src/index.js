@@ -251,7 +251,7 @@ function getClientJS() {
   L.push("  preview.innerHTML = '';");
   L.push("  preview.appendChild(loading);");
   L.push("  try {");
-  L.push("    var reqBody = { model: selModel, prompt: prompt, n: 1, quality: selQ, aspect_ratio: selAR };");
+  L.push("    var reqBody = { model: selModel, prompt: prompt, n: 1, quality: selQ, aspect_ratio: selAR, resolution: '1K' };");
   L.push("    if (refImage) reqBody.image = refImage;");
   L.push("    var resp = await fetch('/v1/images/generations', {");
   L.push("      method: 'POST',");
@@ -454,6 +454,7 @@ async function handleRequest(request, env) {
     }
 
     var ar = body.aspect_ratio || "1:1";
+    var res = body.resolution || "1K";
     // Backward compat: convert size string to aspect_ratio
     if (!body.aspect_ratio && body.size) {
       var wh = body.size.split("x").map(Number);
@@ -466,7 +467,7 @@ async function handleRequest(request, env) {
       else ar = "9:16";
     }
 
-    var clawReq = { prompt: prompt, model: model, n: n, aspect_ratio: ar, quality: quality };
+    var clawReq = { prompt: prompt, model: model, n: n, aspect_ratio: ar, quality: quality, resolution: res };
 
     // Support multiple image formats: image, image_url, input_images, reference_images
     var refImages = [];
