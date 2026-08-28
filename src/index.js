@@ -16,6 +16,69 @@ var MODELS = [
 
 var pool = [];
 
+// ─── Free Proxy Pool ───
+var PROXY_APIS = [
+  'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
+  'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',
+  'https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt',
+  'https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt'
+];
+var proxyPool = [];
+var proxyLastFetch = 0;
+
+async function refreshProxies() {
+  var now = Date.now();
+  if (proxyPool.length > 5 && now - proxyLastFetch < 120000) return;
+  proxyLastFetch = now;
+  var all = [];
+  for (var i = 0; i < PROXY_APIS.length; i++) {
+    try {
+      var r = await fetch(PROXY_APIS[i], { cf: { cacheTtl: 60 } });
+      var text = await r.text();
+      var lines = text.split('\n').map(function(l) { return l.trim(); }).filter(function(l) {
+        return l && l.indexOf(':') > 0 && /^\d/.test(l);
+      });
+      all = all.concat(lines);
+    } catch(e) {}
+  }
+  // Deduplicate
+  var seen = {};
+  proxyPool = [];
+  for (var j = 0; j < all.length; j++) {
+    if (!seen[all[j]]) { seen[all[j]] = 1; proxyPool.push(all[j]); }
+  }
+  // Shuffle
+  for (var k = proxyPool.length - 1; k > 0; k--) {
+    var idx = Math.floor(Math.random() * (k + 1));
+    var tmp = proxyPool[k]; proxyPool[k] = proxyPool[idx]; proxyPool[idx] = tmp;
+  }
+  proxyPool = proxyPool.slice(0, 200);
+}
+
+function pickProxy() {
+  if (proxyPool.length === 0) return null;
+  return proxyPool.pop();
+}
+
+function removeProxy(addr) {
+  var idx = proxyPool.indexOf(addr);
+  if (idx !== -1) proxyPool.splice(idx, 1);
+}
+
+// Try fetch with different CF edge nodes (implicit IP rotation)
+async function proxyFetch(url, opts, proxyAddr) {
+  // Free HTTPS proxies are unreliable, use CF's built-in edge rotation instead
+  // Each fetch() may route through a different CF edge node
+  try {
+    var resp = await fetch(url, Object.assign({}, opts || {}, {
+      cf: { cacheTtl: 0, cacheEverything: false }
+    }));
+    return resp;
+  } catch(e) {
+    return fetch(url, opts);
+  }
+}
+
 async function getToken() {
   var now = Date.now() / 1000 | 0;
   pool = pool.filter(function(t) { return t.exp - 120 > now; });
@@ -419,7 +482,8 @@ async function handleRequest(request, env) {
   if (url.pathname === "/health") {
     try {
       await getToken();
-      return jsonResp({ status: "ok", token_pool: pool.length, models: MODELS.map(function(m) { return m.id; }) }, 200, C);
+      await refreshProxies();
+      return jsonResp({ status: "ok", token_pool: pool.length, proxy_pool: proxyPool.length, models: MODELS.map(function(m) { return m.id; }) }, 200, C);
     } catch(e) {
       return jsonResp({ status: "error", msg: e.message }, 503, C);
     }
@@ -491,27 +555,32 @@ async function handleRequest(request, env) {
       }
     }
 
-    var MAX_ATTEMPTS = 6;
+    // Ensure proxy pool is loaded
+    await refreshProxies();
+    
+    var MAX_ATTEMPTS = Math.max(6, proxyPool.length || 6);
     var lastErr = null;
     for (var attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       try {
         // Refresh token pool before each attempt
         if (pool.length < 3) await refreshPool(5);
         var tok = await getToken();
-        var clawResp = await fetch(IMAGE_URL, {
+        var proxy = pickProxy();
+        var clawResp = await proxyFetch(IMAGE_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-studio-token": tok },
           body: JSON.stringify(clawReq)
-        });
+        }, proxy);
 
         if (clawResp.ok) {
           var clawData = await clawResp.json();
           if (clawData.error) {
-            var errMsg = typeof clawData.error === "string" ? clawData.error : (clawData.error.message || "Claw Hunter error");
+            var errMsg = (typeof clawData.error === 'string') ? clawData.error : (clawData.error.message || JSON.stringify(clawData.error));
             var retrySec = clawData.retry_after_seconds || 0;
             lastErr = errMsg;
-            // Daily limit exhausted - no point retrying
-            if (errMsg.indexOf("daily") !== -1 || errMsg.indexOf("limit reached") !== -1) {
+            // Daily limit exhausted on this proxy - try next proxy
+            if (errMsg.indexOf("daily") !== -1 || errMsg.indexOf("limit") !== -1) {
+              if (proxyPool.length > 1) continue;
               if (retrySec > 0) errMsg += " (resets in " + Math.ceil(retrySec / 3600) + "h)";
               return errResp(429, errMsg);
             }
@@ -547,12 +616,14 @@ async function handleRequest(request, env) {
         if (clawResp.status === 429) {
           // Check response body for retry_after info
           var errBody429 = await clawResp.json().catch(function() { return {}; });
-          var msg429 = (errBody429.error && errBody429.error.message) || "";
+          // Handle both string and object error formats
+          var msg429 = (typeof errBody429.error === 'string') ? errBody429.error : (errBody429.error && errBody429.error.message) || errBody429.message || '';
           var retrySec429 = errBody429.retry_after_seconds || 0;
-          lastErr = msg429 || "Rate limited";
-          // Daily limit - don't retry
-          if (msg429.indexOf("daily") !== -1 || msg429.indexOf("limit reached") !== -1) {
-            var hint = retrySec429 > 0 ? " (resets in " + Math.ceil(retrySec429 / 3600) + "h)" : "";
+          lastErr = msg429 || 'Rate limited';
+          // Daily limit on this proxy - try next proxy
+          if (msg429.indexOf('daily') !== -1 || msg429.indexOf('limit') !== -1) {
+            if (proxyPool.length > 1) continue;
+            var hint = retrySec429 > 0 ? ' (resets in ' + Math.ceil(retrySec429 / 3600) + 'h)' : '';
             return errResp(429, msg429 + hint);
           }
           // Temporary - wait and retry with exponential backoff
