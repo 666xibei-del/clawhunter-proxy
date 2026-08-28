@@ -16,115 +16,6 @@ var MODELS = [
 
 var pool = [];
 
-// ─── Free Proxy Pool ───
-var PROXY_APIS = [
-  'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt'
-];
-var proxyPool = [];
-var proxyLastFetch = 0;
-
-async function refreshProxies() {
-  var now = Date.now();
-  if (proxyPool.length > 5 && now - proxyLastFetch < 600000) return;
-  proxyLastFetch = now;
-  var all = [];
-  for (var i = 0; i < PROXY_APIS.length; i++) {
-    try {
-      var r = await fetch(PROXY_APIS[i], { cf: { cacheTtl: 60 } });
-      var text = await r.text();
-      var lines = text.split('\n').map(function(l) { return l.trim(); }).filter(function(l) {
-        return l && l.indexOf(':') > 0 && /^\d/.test(l);
-      });
-      all = all.concat(lines);
-    } catch(e) {}
-  }
-  // Deduplicate
-  var seen = {};
-  proxyPool = [];
-  for (var j = 0; j < all.length; j++) {
-    if (!seen[all[j]]) { seen[all[j]] = 1; proxyPool.push(all[j]); }
-  }
-  // Shuffle
-  for (var k = proxyPool.length - 1; k > 0; k--) {
-    var idx = Math.floor(Math.random() * (k + 1));
-    var tmp = proxyPool[k]; proxyPool[k] = proxyPool[idx]; proxyPool[idx] = tmp;
-  }
-  proxyPool = proxyPool.slice(0, 200);
-}
-
-function pickProxy() {
-  if (proxyPool.length === 0) return null;
-  return proxyPool.pop();
-}
-
-function removeProxy(addr) {
-  var idx = proxyPool.indexOf(addr);
-  if (idx !== -1) proxyPool.splice(idx, 1);
-}
-
-// Try fetch with different CF edge nodes (implicit IP rotation)
-async function proxyFetch(url, opts, proxyAddr) {
-  if (!proxyAddr) return fetch(url, opts);
-  try {
-    var { connect } = await import('cloudflare:sockets');
-    var parts = proxyAddr.split(':');
-    var pHost = parts[0];
-    var pPort = parseInt(parts[1]) || 8080;
-    var target = new URL(url);
-    var method = (opts && opts.method) || 'GET';
-    var hdrs = (opts && opts.headers) || {};
-    var body = (opts && opts.body) || null;
-    var socket = connect({ hostname: pHost, port: pPort, connectTimeout: 5000 });
-    var writer = socket.writable.getWriter();
-    var reader = socket.readable.getReader();
-    var enc = new TextEncoder();
-    var dec = new TextDecoder();
-    var reqLine = method + ' ' + url + ' HTTP/1.1\r\n';
-    reqLine += 'Host: ' + target.hostname + '\r\n';
-    for (var k in hdrs) reqLine += k + ': ' + hdrs[k] + '\r\n';
-    reqLine += 'Connection: close\r\n';
-    if (body) {
-      var bodyStr = typeof body === 'string' ? body : '';
-      reqLine += 'Content-Length: ' + enc.encode(bodyStr).byteLength + '\r\n';
-    }
-    reqLine += '\r\n';
-    var chunks = [enc.encode(reqLine)];
-    if (body && typeof body === 'string') chunks.push(enc.encode(body));
-    var totalBytes = 0;
-    chunks.forEach(function(c) { totalBytes += c.byteLength; });
-    var merged = new Uint8Array(totalBytes);
-    var off = 0;
-    chunks.forEach(function(c) { merged.set(c, off); off += c.byteLength; });
-    await writer.write(merged);
-    await writer.releaseLock();
-    var respBuf = new Uint8Array(0);
-    while (true) {
-      var ch = await reader.read();
-      if (ch.done) break;
-      var newBuf = new Uint8Array(respBuf.length + ch.value.length);
-      newBuf.set(respBuf); newBuf.set(ch.value, respBuf.length);
-      respBuf = newBuf;
-    }
-    await reader.releaseLock();
-    var respText = dec.decode(respBuf);
-    var sepIdx = respText.indexOf('\r\n\r\n');
-    if (sepIdx === -1) throw new Error('Bad proxy response');
-    var respHead = respText.substring(0, sepIdx);
-    var respBody = respText.substring(sepIdx + 4);
-    var statusMatch = respHead.match(/^HTTP\/[\d.]+\s(\d+)/);
-    var status = statusMatch ? parseInt(statusMatch[1]) : 502;
-    var respHeaders = {};
-    respHead.split('\r\n').slice(1).forEach(function(h) {
-      var colonIdx = h.indexOf(':');
-      if (colonIdx > 0) respHeaders[h.substring(0, colonIdx).trim().toLowerCase()] = h.substring(colonIdx + 1).trim();
-    });
-    return new Response(respBody, { status: status, headers: respHeaders });
-  } catch(e) {
-    removeProxy(proxyAddr);
-    return fetch(url, opts);
-  }
-}
-
 async function getToken() {
   var now = Date.now() / 1000 | 0;
   pool = pool.filter(function(t) { return t.exp - 120 > now; });
@@ -371,7 +262,7 @@ function getClientJS() {
   L.push("      img.alt = 'Generated';");
   L.push("      img.style.cursor = 'pointer';");
   L.push("      img.setAttribute('data-lb', url);");
-      L.push("      preview.innerHTML = '';");
+  L.push("      preview.innerHTML = '';");
   L.push("      preview.appendChild(img);");
   L.push("      var cost = resp.headers.get('X-Claw-Cost') || '0';");
   L.push("      var mode = refImage ? 'Edit' : 'Generate';");
@@ -436,7 +327,7 @@ function getHTML() {
     '.gen-btn{padding:12px 24px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;background:var(--accent);color:white}',
     '.gen-btn:hover{background:var(--accent2)}',
     '.gen-btn:disabled{opacity:.5;cursor:not-allowed}',
-    '.preview{min-height:300px;display:flex;align-items:center;justify-content:center;border:2px dashed var(--border);border-radius:12px;overflow:hidden;position:relative;text-align:center}',,
+    '.preview{min-height:300px;display:flex;align-items:center;justify-content:center;border:2px dashed var(--border);border-radius:12px;overflow:hidden;position:relative;text-align:center}',
     '.preview img{width:100%;height:auto;object-fit:contain;border-radius:8px;cursor:pointer;transition:transform .2s;display:block}',
     '.preview img:hover{transform:scale(1.02)}',
     '.placeholder{text-align:center;color:var(--muted)}',
@@ -467,44 +358,44 @@ function getHTML() {
     '</style></head><body>',
     '<header><h1>&#128062; <span>Claw Hunter</span> Free Image Gen</h1>',
     '<p>OpenAI Compatible API | 3 Free Models | Text-to-Image + Image-to-Image</p></header>',
-    '<div class="wrap"><div class="grid">',
-    '<div class="panel"><h2>&#9997;&#65039; Input</h2>',
-    '<div class="field"><label>Prompt</label><textarea id="prompt" placeholder="Describe the image you want to generate..."></textarea></div>',
-    '<div class="field"><label>Model <span class="badge">FREE</span></label><div class="model-grid" id="modelGrid"></div></div>',
-    '<div class="field" id="imgSection" style="display:none"><label>Reference Image (Edit)</label>',
-    '<div class="upload-zone" id="uploadZone">',
-    '<input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp">',
-    '<div id="refPreview"><p>&#128247; Click or drag image here</p><p class="hint">PNG, JPEG, WebP | Max 10MB</p></div></div>',
-    '<div class="ref-actions"><button class="ref-btn" id="removeBtn">Remove</button></div></div>',
-    '<div class="field"><label>Aspect Ratio</label><div class="opts" id="arOpts">',
-    '<button class="opt-btn active" data-val="1:1">1:1</button>',
-    '<button class="opt-btn" data-val="16:9">16:9</button>',
-    '<button class="opt-btn" data-val="9:16">9:16</button>',
-    '<button class="opt-btn" data-val="4:3">4:3</button>',
-    '<button class="opt-btn" data-val="3:4">3:4</button>',
+    '<div class=\"wrap\"><div class=\"grid\">',
+    '<div class=\"panel\"><h2>&#9997;&#65039; Input</h2>',
+    '<div class=\"field\"><label>Prompt</label><textarea id=\"prompt\" placeholder=\"Describe the image you want to generate...\"></textarea></div>',
+    '<div class=\"field\"><label>Model <span class=\"badge\">FREE</span></label><div class=\"model-grid\" id=\"modelGrid\"></div></div>',
+    '<div class=\"field\" id=\"imgSection\" style=\"display:none\"><label>Reference Image (Edit)</label>',
+    '<div class=\"upload-zone\" id=\"uploadZone\">',
+    '<input type=\"file\" id=\"imageInput\" accept=\"image/png,image/jpeg,image/webp\">',
+    '<div id=\"refPreview\"><p>&#128247; Click or drag image here</p><p class=\"hint\">PNG, JPEG, WebP | Max 10MB</p></div></div>',
+    '<div class=\"ref-actions\"><button class=\"ref-btn\" id=\"removeBtn\">Remove</button></div></div>',
+    '<div class=\"field\"><label>Aspect Ratio</label><div class=\"opts\" id=\"arOpts\">',
+    '<button class=\"opt-btn active\" data-val=\"1:1\">1:1</button>',
+    '<button class=\"opt-btn\" data-val=\"16:9\">16:9</button>',
+    '<button class=\"opt-btn\" data-val=\"9:16\">9:16</button>',
+    '<button class=\"opt-btn\" data-val=\"4:3\">4:3</button>',
+    '<button class=\"opt-btn\" data-val=\"3:4\">3:4</button>',
     '</div></div>',
-    '<div class="field"><label>Quality</label><div class="opts" id="qOpts">',
-    '<button class="opt-btn" data-val="low">Low</button>',
-    '<button class="opt-btn active" data-val="medium">Medium</button>',
-    '<button class="opt-btn" data-val="high">High</button>',
+    '<div class=\"field\"><label>Quality</label><div class=\"opts\" id=\"qOpts\">',
+    '<button class=\"opt-btn\" data-val=\"low\">Low</button>',
+    '<button class=\"opt-btn active\" data-val=\"medium\">Medium</button>',
+    '<button class=\"opt-btn\" data-val=\"high\">High</button>',
     '</div></div>',
-    '<button class="gen-btn" id="genBtn">&#127912; Generate</button>',
-    '<div class="status" id="status"></div></div>',
-    '<div class="panel"><h2>&#128444;&#65039; Preview</h2>',
-    '<div class="preview" id="preview"><div class="placeholder"><div class="icon">&#127912;</div><p>Enter prompt and click Generate</p></div></div>',
+    '<button class=\"gen-btn\" id=\"genBtn\">&#127912; Generate</button>',
+    '<div class=\"status\" id=\"status\"></div></div>',
+    '<div class=\"panel\"><h2>&#128444;&#65039; Preview</h2>',
+    '<div class=\"preview\" id=\"preview\"><div class=\"placeholder\"><div class=\"icon\">&#127912;</div><p>Enter prompt and click Generate</p></div></div>',
     '</div></div>',
-    '<div class="api-info"><h3>&#128225; API Usage (Python)</h3>',
-    '<pre><code>from openai import OpenAI\n\nclient = OpenAI(\n  base_url="https://YOUR-WORKER.workers.dev/v1",\n  api_key="your-key"\n)\n\n# Text-to-Image\nresp = client.images.generate(\n  model="gpt-image-2",\n  prompt="A cute cat", n=1\n)\n\n# Image-to-Image\nimport base64\nwith open("input.png", "rb") as f:\n  img_b64 = "data:image/png;base64," + base64.b64encode(f.read()).decode()\nresp = client.images.generate(\n  model="gpt-image-2",\n  prompt="Add sunglasses",\n  extra_body={"image": img_b64}\n)\nprint(resp.data[0].url)</code></pre></div></div>',
-    '<div id="lightbox">',
-    '<button class="lightbox-close">&times;</button>',
-    '<img id="lightboxImg" src="" alt="Enlarged">',
-    '<div class="lightbox-hint">Click outside or press ESC to close</div>',
+    '<div class=\"api-info\"><h3>&#128225; API Usage (Python)</h3>',
+    '<pre><code>from openai import OpenAI\\n\\nclient = OpenAI(\\n  base_url=\"https://YOUR-WORKER.workers.dev/v1\",\\n  api_key=\"your-key\"\\n)\\n\\n# Text-to-Image\\nresp = client.images.generate(\\n  model=\"gpt-image-2\",\\n  prompt=\"A cute cat\", n=1\\n)\\n\\n# Image-to-Image\\nimport base64\\nwith open(\"input.png\", \"rb\") as f:\\n  img_b64 = \"data:image/png;base64,\" + base64.b64encode(f.read()).decode()\\nresp = client.images.generate(\\n  model=\"gpt-image-2\",\\n  prompt=\"Add sunglasses\",\\n  extra_body={\"image\": img_b64}\\n)\\nprint(resp.data[0].url)</code></pre></div></div>',
+    '<div id=\"lightbox\">',
+    '<button class=\"lightbox-close\">&times;</button>',
+    '<img id=\"lightboxImg\" src=\"\" alt=\"Enlarged\">',
+    '<div class=\"lightbox-hint\">Click outside or press ESC to close</div>',
     '</div>',
-    '<script src="/app.js"></script></body></html>'
+    '<script src=\"/app.js\"></script></body></html>'
   ].join("\n");
 }
 
-/* ─── Request Handler ─── */
+/* --- Request Handler --- */
 
 async function handleRequest(request, env) {
   var url = new URL(request.url);
@@ -523,15 +414,14 @@ async function handleRequest(request, env) {
   if (url.pathname === "/health") {
     try {
       await getToken();
-      await refreshProxies();
-      return jsonResp({ status: "ok", token_pool: pool.length, proxy_pool: proxyPool.length, models: MODELS.map(function(m) { return m.id; }) }, 200, C);
+      return jsonResp({ status: "ok", token_pool: pool.length, models: MODELS.map(function(m) { return m.id; }) }, 200, C);
     } catch(e) {
       return jsonResp({ status: "error", msg: e.message }, 503, C);
     }
   }
 
   if (url.pathname === "/admin/refresh-tokens" && request.method === "POST") {
-    await refreshPool(5);
+    await refreshPool(3);
     return jsonResp({ status: "ok", pool_size: pool.length }, 200, C);
   }
 
@@ -560,7 +450,6 @@ async function handleRequest(request, env) {
 
     var ar = body.aspect_ratio || "1:1";
     var res = body.resolution || "1K";
-    // Backward compat: convert size string to aspect_ratio
     if (!body.aspect_ratio && body.size) {
       var wh = body.size.split("x").map(Number);
       if (wh[0] === wh[1]) ar = "1:1";
@@ -574,7 +463,6 @@ async function handleRequest(request, env) {
 
     var clawReq = { prompt: prompt, model: model, n: n, aspect_ratio: ar, quality: quality, resolution: res };
 
-    // Support multiple image formats: image, image_url, input_images, reference_images
     var refImages = [];
     if (body.image) refImages.push(body.image);
     if (body.image_url) refImages.push(body.image_url);
@@ -596,52 +484,25 @@ async function handleRequest(request, env) {
       }
     }
 
-    // Ensure proxy pool is loaded
-    await refreshProxies();
-    
-    var MAX_ATTEMPTS = Math.min(10, Math.max(4, proxyPool.length || 4));
-    var lastErr = null;
-    for (var attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // Try with fresh token, retry up to 3 times
+    for (var attempt = 0; attempt < 3; attempt++) {
       try {
-        // Refresh token pool before each attempt
         if (pool.length < 2) await refreshPool(3);
         var tok = await getToken();
-        var proxy = pickProxy();
-        var clawResp = await proxyFetch(IMAGE_URL, {
+        var clawResp = await fetch(IMAGE_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-studio-token": tok },
           body: JSON.stringify(clawReq)
-        }, proxy);
+        });
 
-        if (clawResp.ok) {
-          var clawData = await clawResp.json();
-          if (clawData.error) {
-            var errMsg = (typeof clawData.error === 'string') ? clawData.error : (clawData.error.message || JSON.stringify(clawData.error));
-            var retrySec = clawData.retry_after_seconds || 0;
-            lastErr = errMsg;
-            // Daily limit exhausted on this proxy - try next proxy
-            if (errMsg.indexOf("daily") !== -1 || errMsg.indexOf("limit") !== -1) {
-              if (proxyPool.length > 1) continue;
-              if (retrySec > 0) errMsg += " (resets in " + Math.ceil(retrySec / 3600) + "h)";
-              return errResp(429, errMsg);
-            }
-            // Temporary rate limit - wait and retry
-            var waitMs = retrySec > 0 ? Math.min(retrySec * 1000, 30000) : Math.min(2000 * Math.pow(2, attempt), 20000);
-            if (attempt < MAX_ATTEMPTS - 1) {
-              await new Promise(function(r) { setTimeout(r, Math.min(waitMs, 5000)); });
-              continue;
-            }
-            return errResp(429, errMsg);
-          }
-          if (!clawData.images || !clawData.images.length) {
-            return errResp(500, "No images returned");
-          }
+        var clawData = await clawResp.json().catch(function() { return {}; });
 
+        // Success
+        if (clawResp.ok && !clawData.error && clawData.images && clawData.images.length) {
           var billing = clawData.billing || {};
           var resultData = clawData.images.map(function(img) {
             return { url: img.url || ("data:image/png;base64," + img.b64_json) };
           });
-
           return jsonResp({
             created: Math.floor(Date.now() / 1000),
             data: resultData,
@@ -653,38 +514,38 @@ async function handleRequest(request, env) {
           }, C));
         }
 
-        if (clawResp.status === 429) {
-          // Check response body for retry_after info
-          var errBody429 = await clawResp.json().catch(function() { return {}; });
-          // Handle both string and object error formats
-          var msg429 = (typeof errBody429.error === 'string') ? errBody429.error : (errBody429.error && errBody429.error.message) || errBody429.message || '';
-          var retrySec429 = errBody429.retry_after_seconds || 0;
-          lastErr = msg429 || 'Rate limited';
-          // Daily limit on this proxy - try next proxy
-          if (msg429.indexOf('daily') !== -1 || msg429.indexOf('limit') !== -1) {
-            if (proxyPool.length > 1) continue;
-            var hint = retrySec429 > 0 ? ' (resets in ' + Math.ceil(retrySec429 / 3600) + 'h)' : '';
-            return errResp(429, msg429 + hint);
-          }
-          // Temporary - wait and retry with exponential backoff
-          var waitMs429 = retrySec429 > 0 ? Math.min(retrySec429 * 1000, 30000) : Math.min(2000 * Math.pow(2, attempt), 20000);
-          if (attempt < MAX_ATTEMPTS - 1) {
-            await new Promise(function(r) { setTimeout(r, Math.min(waitMs429, 5000)); });
-            continue;
-          }
-          return errResp(429, lastErr);
+        // Parse error message
+        var errMsg = "";
+        if (clawData.error) {
+          errMsg = (typeof clawData.error === "string") ? clawData.error : (clawData.error.message || JSON.stringify(clawData.error));
+        } else if (clawResp.status === 429) {
+          errMsg = "Rate limited";
+        } else {
+          errMsg = "HTTP " + clawResp.status;
+        }
+        var retrySec = clawData.retry_after_seconds || 0;
+
+        // Daily limit - return immediately with reset time
+        if (errMsg.indexOf("daily") !== -1 || errMsg.indexOf("limit") !== -1) {
+          var hint = retrySec > 0 ? " (resets in " + Math.ceil(retrySec / 3600) + "h)" : "";
+          return errResp(429, errMsg + hint);
         }
 
-        var errBody = await clawResp.json().catch(function() { return {}; });
-        var upstreamMsg = (typeof errBody.error === 'string') ? errBody.error : (errBody.error && errBody.error.message) || errBody.error || errBody.message || 'Claw Hunter API error (HTTP ' + clawResp.status + ')';
-        return errResp(clawResp.status, upstreamMsg);
+        // Temporary rate limit - try fresh token
+        if (clawResp.status === 429 && attempt < 2) {
+          pool = [];
+          await refreshPool(3);
+          continue;
+        }
+
+        return errResp(clawResp.status || 500, errMsg || "Generation failed");
 
       } catch(e) {
         return errResp(500, "Internal error: " + e.message);
       }
     }
 
-    return errResp(429, lastErr || "Rate limited after retries. Try again later.");
+    return errResp(429, "Rate limited. Try again later.");
   }
 
   return errResp(404, "Not found");
