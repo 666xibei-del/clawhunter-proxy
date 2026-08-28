@@ -64,14 +64,63 @@ function removeProxy(addr) {
 
 // Try fetch with different CF edge nodes (implicit IP rotation)
 async function proxyFetch(url, opts, proxyAddr) {
-  // Free HTTPS proxies are unreliable, use CF's built-in edge rotation instead
-  // Each fetch() may route through a different CF edge node
+  if (!proxyAddr) return fetch(url, opts);
   try {
-    var resp = await fetch(url, Object.assign({}, opts || {}, {
-      cf: { cacheTtl: 0, cacheEverything: false }
-    }));
-    return resp;
+    var { connect } = await import('cloudflare:sockets');
+    var parts = proxyAddr.split(':');
+    var pHost = parts[0];
+    var pPort = parseInt(parts[1]) || 8080;
+    var target = new URL(url);
+    var method = (opts && opts.method) || 'GET';
+    var hdrs = (opts && opts.headers) || {};
+    var body = (opts && opts.body) || null;
+    var socket = connect({ hostname: pHost, port: pPort, connectTimeout: 5000 });
+    var writer = socket.writable.getWriter();
+    var reader = socket.readable.getReader();
+    var enc = new TextEncoder();
+    var dec = new TextDecoder();
+    var reqLine = method + ' ' + url + ' HTTP/1.1\r\n';
+    reqLine += 'Host: ' + target.hostname + '\r\n';
+    for (var k in hdrs) reqLine += k + ': ' + hdrs[k] + '\r\n';
+    reqLine += 'Connection: close\r\n';
+    if (body) {
+      var bodyStr = typeof body === 'string' ? body : '';
+      reqLine += 'Content-Length: ' + enc.encode(bodyStr).byteLength + '\r\n';
+    }
+    reqLine += '\r\n';
+    var chunks = [enc.encode(reqLine)];
+    if (body && typeof body === 'string') chunks.push(enc.encode(body));
+    var totalBytes = 0;
+    chunks.forEach(function(c) { totalBytes += c.byteLength; });
+    var merged = new Uint8Array(totalBytes);
+    var off = 0;
+    chunks.forEach(function(c) { merged.set(c, off); off += c.byteLength; });
+    await writer.write(merged);
+    await writer.releaseLock();
+    var respBuf = new Uint8Array(0);
+    while (true) {
+      var ch = await reader.read();
+      if (ch.done) break;
+      var newBuf = new Uint8Array(respBuf.length + ch.value.length);
+      newBuf.set(respBuf); newBuf.set(ch.value, respBuf.length);
+      respBuf = newBuf;
+    }
+    await reader.releaseLock();
+    var respText = dec.decode(respBuf);
+    var sepIdx = respText.indexOf('\r\n\r\n');
+    if (sepIdx === -1) throw new Error('Bad proxy response');
+    var respHead = respText.substring(0, sepIdx);
+    var respBody = respText.substring(sepIdx + 4);
+    var statusMatch = respHead.match(/^HTTP\/[\d.]+\s(\d+)/);
+    var status = statusMatch ? parseInt(statusMatch[1]) : 502;
+    var respHeaders = {};
+    respHead.split('\r\n').slice(1).forEach(function(h) {
+      var colonIdx = h.indexOf(':');
+      if (colonIdx > 0) respHeaders[h.substring(0, colonIdx).trim().toLowerCase()] = h.substring(colonIdx + 1).trim();
+    });
+    return new Response(respBody, { status: status, headers: respHeaders });
   } catch(e) {
+    removeProxy(proxyAddr);
     return fetch(url, opts);
   }
 }
