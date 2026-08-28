@@ -18,17 +18,14 @@ var pool = [];
 
 // ─── Free Proxy Pool ───
 var PROXY_APIS = [
-  'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
-  'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',
-  'https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt',
-  'https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt'
+  'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt'
 ];
 var proxyPool = [];
 var proxyLastFetch = 0;
 
 async function refreshProxies() {
   var now = Date.now();
-  if (proxyPool.length > 5 && now - proxyLastFetch < 120000) return;
+  if (proxyPool.length > 5 && now - proxyLastFetch < 600000) return;
   proxyLastFetch = now;
   var all = [];
   for (var i = 0; i < PROXY_APIS.length; i++) {
@@ -94,19 +91,14 @@ async function getToken() {
 }
 
 async function refreshPool(count) {
-  var n = count || 5;
-  var promises = [];
+  var n = Math.min(count || 3, 3);
   for (var i = 0; i < n; i++) {
-    promises.push(
-      fetch(TOKEN_URL)
-        .then(function(r) { return r.json(); })
-        .then(function(d) {
-          pool.push({ tok: d.token, exp: d.expiresAt, used: 0 });
-        })
-        .catch(function() {})
-    );
+    try {
+      var r = await fetch(TOKEN_URL);
+      var d = await r.json();
+      pool.push({ tok: d.token, exp: d.expiresAt, used: 0 });
+    } catch(e) {}
   }
-  await Promise.all(promises);
 }
 
 function jsonResp(data, code, headers) {
@@ -558,12 +550,12 @@ async function handleRequest(request, env) {
     // Ensure proxy pool is loaded
     await refreshProxies();
     
-    var MAX_ATTEMPTS = Math.max(6, proxyPool.length || 6);
+    var MAX_ATTEMPTS = Math.min(10, Math.max(4, proxyPool.length || 4));
     var lastErr = null;
     for (var attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       try {
         // Refresh token pool before each attempt
-        if (pool.length < 3) await refreshPool(5);
+        if (pool.length < 2) await refreshPool(3);
         var tok = await getToken();
         var proxy = pickProxy();
         var clawResp = await proxyFetch(IMAGE_URL, {
@@ -587,8 +579,7 @@ async function handleRequest(request, env) {
             // Temporary rate limit - wait and retry
             var waitMs = retrySec > 0 ? Math.min(retrySec * 1000, 30000) : Math.min(2000 * Math.pow(2, attempt), 20000);
             if (attempt < MAX_ATTEMPTS - 1) {
-              await refreshPool(5);
-              await new Promise(function(r) { setTimeout(r, waitMs); });
+              await new Promise(function(r) { setTimeout(r, Math.min(waitMs, 5000)); });
               continue;
             }
             return errResp(429, errMsg);
@@ -629,8 +620,7 @@ async function handleRequest(request, env) {
           // Temporary - wait and retry with exponential backoff
           var waitMs429 = retrySec429 > 0 ? Math.min(retrySec429 * 1000, 30000) : Math.min(2000 * Math.pow(2, attempt), 20000);
           if (attempt < MAX_ATTEMPTS - 1) {
-            await refreshPool(5);
-            await new Promise(function(r) { setTimeout(r, waitMs429); });
+            await new Promise(function(r) { setTimeout(r, Math.min(waitMs429, 5000)); });
             continue;
           }
           return errResp(429, lastErr);
