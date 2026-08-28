@@ -159,8 +159,8 @@ function getClientJS() {
   L.push("  var img = document.getElementById('lightboxImg');");
   L.push("  if (!lb || !img || !src) return;");
   L.push("  img.src = src;");
-  L.push("  lb.style.visibility = 'visible';");
-  L.push("  requestAnimationFrame(function() { lb.classList.add('open'); });");
+  L.push("  lb.style.display = 'flex';");
+  L.push("  lb.classList.add('open');");
   L.push("  document.body.style.overflow = 'hidden';");
   L.push("}");
   L.push("");
@@ -168,7 +168,7 @@ function getClientJS() {
   L.push("  var lb = document.getElementById('lightbox');");
   L.push("  if (!lb) return;");
   L.push("  lb.classList.remove('open');");
-  L.push("  setTimeout(function() { lb.style.visibility = 'hidden'; }, 260);");
+  L.push("  lb.style.display = 'none';");
   L.push("  document.body.style.overflow = '';");
   L.push("}");
   L.push("");
@@ -193,12 +193,12 @@ function getClientJS() {
   L.push("});");
   L.push("");
   L.push("document.getElementById('preview').addEventListener('click', function(e) {");
-  L.push("  var img = e.target.closest('img[data-lb]');");
+  L.push("  var img = e.target.closest('[data-lb]');");
   L.push("  if (img) openLightbox(img.getAttribute('data-lb'));");
   L.push("});");
   L.push("");
   L.push("document.getElementById('refPreview').addEventListener('click', function(e) {");
-  L.push("  var img = e.target.closest('img[data-lb]');");
+  L.push("  var img = e.target.closest('[data-lb]');");
   L.push("  if (img) openLightbox(img.getAttribute('data-lb'));");
   L.push("});");
   L.push("");
@@ -328,8 +328,8 @@ function getHTML() {
     '.gen-btn{padding:12px 24px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;background:var(--accent);color:white}',
     '.gen-btn:hover{background:var(--accent2)}',
     '.gen-btn:disabled{opacity:.5;cursor:not-allowed}',
-    '.preview{min-height:300px;display:flex;align-items:center;justify-content:center;border:2px dashed var(--border);border-radius:12px;overflow:hidden;position:relative}',
-    '.preview img{max-width:100%;max-height:500px;object-fit:contain;border-radius:8px;cursor:pointer;transition:transform .2s}',
+    '.preview{min-height:300px;display:flex;align-items:center;justify-content:center;border:2px dashed var(--border);border-radius:12px;overflow:hidden;position:relative;text-align:center}',,
+    '.preview img{width:100%;height:auto;object-fit:contain;border-radius:8px;cursor:pointer;transition:transform .2s;display:block}',
     '.preview img:hover{transform:scale(1.02)}',
     '.placeholder{text-align:center;color:var(--muted)}',
     '.placeholder .icon{font-size:48px;margin-bottom:8px}',
@@ -350,9 +350,9 @@ function getHTML() {
     '.api-info{margin-top:24px;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:12px}',
     '.api-info h3{font-size:14px;margin-bottom:12px}',
     '.api-info pre{background:var(--bg);padding:12px;border-radius:8px;overflow-x:auto;font-size:12px;line-height:1.6}',
-    '.lightbox{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.92);cursor:zoom-out;visibility:hidden;opacity:0;transition:opacity .25s ease}',
-    '.lightbox.open{visibility:visible;opacity:1}',
-    '.lightbox img{max-width:92vw;max-height:92vh;object-fit:contain;border-radius:8px;box-shadow:0 0 80px rgba(0,0,0,.6)}',
+    '#lightbox{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0);transition:background .2s ease}',
+    '#lightbox.open{display:flex;background:rgba(0,0,0,.92)}',
+    '#lightbox img{max-width:92vw;max-height:92vh;object-fit:contain;border-radius:8px;box-shadow:0 0 80px rgba(0,0,0,.6)}',
     '.lightbox-close{position:absolute;top:20px;right:20px;width:44px;height:44px;border:none;border-radius:50%;background:rgba(255,255,255,.1);color:white;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s;z-index:1}',
     '.lightbox-close:hover{background:rgba(255,255,255,.25)}',
     '.lightbox-hint{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.4);font-size:12px}',
