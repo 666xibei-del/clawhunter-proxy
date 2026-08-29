@@ -705,8 +705,13 @@ async function handleRequest(request, env) {
     var lastErr = "";
     var dailyLimitHit = false;
 
-    // Phase 1: Try direct requests (up to 3 attempts with fresh tokens)
-    for (var attempt = 0; attempt < 3; attempt++) {
+    // CF edge node colos - each has different outbound IP
+    // Shuffle for random distribution across edge nodes
+    var COLOS = shuffle(["NRT","SIN","HKG","LAX","FRA","LHR","AMS","CDG","JFK","ORD","SFO","SEA","MIA","ATL"]);
+    var MAX_COLOS = Math.min(8, COLOS.length); // Limit to stay under CF subrequest limit
+
+    // Phase 1: Try direct requests with different edge nodes
+    for (var attempt = 0; attempt < MAX_COLOS; attempt++) {
       try {
         if (!Array.isArray(pool)) pool = [];
         if (pool.length < 2) await refreshPool(3);
@@ -714,7 +719,8 @@ async function handleRequest(request, env) {
         var clawResp = await fetch(IMAGE_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-studio-token": tok },
-          body: JSON.stringify(clawReq)
+          body: JSON.stringify(clawReq),
+          cf: { colo: COLOS[attempt] }
         });
 
         var clawData = await clawResp.json().catch(function() { return {};
@@ -748,7 +754,7 @@ async function handleRequest(request, env) {
             "X-Claw-Model": billing.model || model,
             "X-Claw-Cost": String(billing.usd || 0),
             "X-Claw-Note": billing.note || "",
-            "X-Claw-Edge": "direct"
+            "X-Claw-Edge": "direct-" + COLOS[attempt]
           }, C));
         }
 
@@ -764,14 +770,14 @@ async function handleRequest(request, env) {
         lastErr = errMsg;
         var retrySec = clawData.retry_after_seconds || 0;
 
-        // Daily limit - flag it but try relays before giving up
+        // Daily limit on this colo - try next colo (different edge = different IP)
         if (errMsg.indexOf("daily") !== -1 || errMsg.indexOf("limit") !== -1) {
-          dailyLimitHit = true;
-          break; // Exit direct attempts, go to relay phase
+          lastErr = errMsg;
+          continue; // Try next colo
         }
 
-        // Temporary rate limit - try fresh token
-        if (clawResp.status === 429 && attempt < 2) {
+        // Temporary rate limit - try next colo with fresh token
+        if (clawResp.status === 429) {
           pool = [];
           await refreshPool(3);
           continue;
