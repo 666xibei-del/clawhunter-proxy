@@ -49,9 +49,9 @@ async function relayFetch(relayUrl, clawReq, secret) {
 }
 
 var MODELS = [
-  { id: "gpt-image-2",     name: "GPT Image 2",     provider: "OpenAI",  cost: 0, tag: "FREE", freeRes: "1K", edit: true },
-  { id: "nano-banana-2",   name: "Nano Banana 2",   provider: "Google",  cost: 0, tag: "FREE", freeRes: "1K", edit: true },
-  { id: "kling-v3",        name: "Kling V3",        provider: "Kuaishou", cost: 0, tag: "FREE", edit: false }
+  { id: "gpt-image-2",     name: "GPT Image 2",     provider: "OpenAI",  cost: 0, tag: "FREE", freeRes: "1K", edit: true, ar: true },
+  { id: "nano-banana-2",   name: "Nano Banana 2",   provider: "Google",  cost: 0, tag: "FREE", freeRes: "1K", edit: true, ar: false },
+  { id: "kling-v3",        name: "Kling V3",        provider: "Kuaishou", cost: 0, tag: "FREE", edit: false, ar: false }
 ];
 
 var pool = [];
@@ -140,6 +140,20 @@ function getClientJS() {
   L.push("  else { section.style.display = 'none'; refImage = null; }");
   L.push("  var btn = document.getElementById('genBtn');");
   L.push("  if (btn) btn.innerHTML = refImage ? 'Edit Image' : 'Generate';");
+  L.push("  // Show/hide aspect ratio options based on model support");
+  L.push("  var arSection = document.getElementById('arOpts');");
+  L.push("  var arLabel = arSection ? arSection.parentElement.querySelector('label') : null;");
+  L.push("  if (m && m.ar) {");
+  L.push("    arSection.style.opacity = '1';");
+  L.push("    arSection.style.pointerEvents = 'auto';");
+  L.push("    if (arLabel) arLabel.innerHTML = 'Aspect Ratio';");
+  L.push("  } else {");
+  L.push("    arSection.style.opacity = '0.4';");
+  L.push("    arSection.style.pointerEvents = 'none';");
+  L.push("    if (arLabel) arLabel.innerHTML = 'Aspect Ratio <span style=\"color:var(--muted)\">(not supported by this model)</span>';");
+  L.push("    selAR = '1:1';");
+  L.push("    document.querySelectorAll('#arOpts .opt-btn').forEach(function(b) { b.classList.toggle('active', b.getAttribute('data-val') === '1:1'); });");
+  L.push("  }");
   L.push("}");
   L.push("");
   L.push("function pickModel(id) {");
@@ -285,9 +299,11 @@ function getClientJS() {
   L.push("  loading.appendChild(spinner);");
   L.push("  preview.innerHTML = '';");
   L.push("  preview.appendChild(loading);");
-  L.push("  try {");
-  L.push("    var reqBody = { model: selModel, prompt: prompt, n: 1, quality: selQ, aspect_ratio: selAR, resolution: '1K' };");
-  L.push("    if (refImage) reqBody.image = refImage;");
+  L.push("  try {");    L.push("    var reqBody = { model: selModel, prompt: prompt, n: 1 };");
+    L.push("    var m = MODELS.find(function(x) { return x.id === selModel; });");
+    L.push("    if (m && m.ar) { reqBody.aspect_ratio = selAR; reqBody.resolution = '1K'; }");
+    L.push("    if (m && m.ar) reqBody.quality = selQ;");
+    L.push("    if (refImage) reqBody.image = refImage;");
   L.push("    var resp = await fetch('/v1/images/generations', {");
   L.push("      method: 'POST',");
   L.push("      headers: {'Content-Type':'application/json','Authorization':'Bearer free'},");
@@ -516,7 +532,15 @@ async function handleRequest(request, env) {
       else ar = "9:16";
     }
 
-    var clawReq = { prompt: prompt, model: model, n: n, aspect_ratio: ar, quality: quality, resolution: res };
+    // Only send aspect_ratio for models that support it (gpt-image-2)
+    // nano-banana-2 and kling-v3 do NOT support aspect_ratio
+    var AR_MODELS = ["gpt-image-2"];
+    var QUALITY_MODELS = ["gpt-image-2"];
+    var RESOLUTION_MODELS = ["gpt-image-2", "nano-banana-2"];
+    var clawReq = { prompt: prompt, model: model, n: n };
+    if (AR_MODELS.indexOf(model) !== -1) clawReq.aspect_ratio = ar;
+    if (QUALITY_MODELS.indexOf(model) !== -1) clawReq.quality = quality;
+    if (RESOLUTION_MODELS.indexOf(model) !== -1) clawReq.resolution = res;
 
     var refImages = [];
     if (body.image) refImages.push(body.image);
@@ -562,7 +586,19 @@ async function handleRequest(request, env) {
         if (clawResp.ok && !clawData.error && clawData.images && clawData.images.length) {
           var billing = clawData.billing || {};
           var resultData = clawData.images.map(function(img) {
-            return { url: img.url || ("data:image/png;base64," + img.b64_json) };
+            if (img.url) return { url: img.url };
+            // Detect actual image format from base64 data
+            var b64 = img.b64_json || "";
+            var mime = "image/png"; // default
+            if (b64.length > 0) {
+              try {
+                var raw = atob(b64.substring(0, 16));
+                if (raw.charCodeAt(0) === 0xFF && raw.charCodeAt(1) === 0xD8) mime = "image/jpeg";
+                else if (raw.substring(0, 4) === "RIFF") mime = "image/webp";
+                else if (raw.charCodeAt(0) === 0x89 && raw.substring(1, 4) === "PNG") mime = "image/png";
+              } catch(e) {}
+            }
+            return { url: "data:" + mime + ";base64," + b64 };
           });
           return jsonResp({
             created: Math.floor(Date.now() / 1000),
@@ -619,7 +655,17 @@ async function handleRequest(request, env) {
           if (relayResult.status === 200 && !rd.error && rd.images && rd.images.length) {
             var billing2 = rd.billing || {};
             var resultData2 = rd.images.map(function(img) {
-              return { url: img.url || ("data:image/png;base64," + img.b64_json) };
+              if (img.url) return { url: img.url };
+              var b64r = img.b64_json || "";
+              var mime2 = "image/png";
+              if (b64r.length > 0) {
+                try {
+                  var raw2 = atob(b64r.substring(0, 16));
+                  if (raw2.charCodeAt(0) === 0xFF && raw2.charCodeAt(1) === 0xD8) mime2 = "image/jpeg";
+                  else if (raw2.substring(0, 4) === "RIFF") mime2 = "image/webp";
+                } catch(e) {}
+              }
+              return { url: "data:" + mime2 + ";base64," + b64r };
             });
             return jsonResp({
               created: Math.floor(Date.now() / 1000),
