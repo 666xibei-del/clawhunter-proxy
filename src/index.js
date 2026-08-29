@@ -8,6 +8,46 @@ var BASE = "https://clawhunter.fun";
 var TOKEN_URL = BASE + "/api/v1/studio/token";
 var IMAGE_URL = BASE + "/api/studio/images";
 
+// Relay pool: each relay is a Worker on a different CF account/edge node
+// Set RELAY_URLS env var as comma-separated list of relay Worker URLs
+// e.g. "https://relay1.account1.workers.dev,https://relay2.account2.workers.dev"
+// Relay secret must match RELAY_SECRET on relay Workers
+var DEFAULT_RELAYS = [];
+
+function getRelayPool(env) {
+  if (env && env.RELAY_URLS) {
+    return env.RELAY_URLS.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+  }
+  return DEFAULT_RELAYS;
+}
+
+async function relayFetch(relayUrl, clawReq, secret) {
+  var headers = { "Content-Type": "application/json" };
+  if (secret) headers["X-Relay-Token"] = secret;
+  // Support both raw URLs and URLs with /relay suffix
+  var endpoint = relayUrl;
+  if (!endpoint.endsWith("/relay") && !endpoint.endsWith("/api/relay")) {
+    endpoint = endpoint + "/relay";
+  }
+  // Timeout after 25 seconds (CF Worker limit is 30s)
+  var controller = new AbortController();
+  var timer = setTimeout(function() { controller.abort(); }, 25000);
+  try {
+    var resp = await fetch(endpoint, {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify({ request: clawReq }),
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    var data = await resp.json().catch(function() { return {}; });
+    return { status: resp.status, data: data };
+  } catch(e) {
+    clearTimeout(timer);
+    return { status: 0, data: { error: e.name === "AbortError" ? "Relay timeout" : e.message } };
+  }
+}
+
 var MODELS = [
   { id: "gpt-image-2",     name: "GPT Image 2",     provider: "OpenAI",  cost: 0, tag: "FREE", freeRes: "1K", edit: true },
   { id: "nano-banana-2",   name: "Nano Banana 2",   provider: "Google",  cost: 0, tag: "FREE", freeRes: "1K", edit: true },
@@ -414,7 +454,22 @@ async function handleRequest(request, env) {
   if (url.pathname === "/health") {
     try {
       await getToken();
-      return jsonResp({ status: "ok", token_pool: pool.length, models: MODELS.map(function(m) { return m.id; }) }, 200, C);
+      var relays = getRelayPool(env);
+      var platforms = relays.map(function(r) {
+        if (r.indexOf("vercel.app") !== -1) return "vercel";
+        if (r.indexOf("deno.dev") !== -1) return "deno";
+        if (r.indexOf("netlify.app") !== -1) return "netlify";
+        if (r.indexOf("workers.dev") !== -1) return "cf-worker";
+        return "custom";
+      });
+      return jsonResp({
+        status: "ok",
+        token_pool: pool.length,
+        relays: relays.length,
+        platforms: platforms,
+        edge_nodes: "direct + " + relays.length + " relays",
+        models: MODELS.map(function(m) { return m.id; })
+      }, 200, C);
     } catch(e) {
       return jsonResp({ status: "error", msg: e.message }, 503, C);
     }
@@ -484,7 +539,13 @@ async function handleRequest(request, env) {
       }
     }
 
-    // Try with fresh token, retry up to 3 times
+    // Collect relay pool from env
+    var relays = getRelayPool(env);
+    var relaySecret = (env && env.RELAY_SECRET) || "";
+    var lastErr = "";
+    var dailyLimitHit = false;
+
+    // Phase 1: Try direct requests (up to 3 attempts with fresh tokens)
     for (var attempt = 0; attempt < 3; attempt++) {
       try {
         if (pool.length < 2) await refreshPool(3);
@@ -510,7 +571,8 @@ async function handleRequest(request, env) {
           }, 200, Object.assign({
             "X-Claw-Model": billing.model || model,
             "X-Claw-Cost": String(billing.usd || 0),
-            "X-Claw-Note": billing.note || ""
+            "X-Claw-Note": billing.note || "",
+            "X-Claw-Edge": "direct"
           }, C));
         }
 
@@ -523,12 +585,13 @@ async function handleRequest(request, env) {
         } else {
           errMsg = "HTTP " + clawResp.status;
         }
+        lastErr = errMsg;
         var retrySec = clawData.retry_after_seconds || 0;
 
-        // Daily limit - return immediately with reset time
+        // Daily limit - flag it but try relays before giving up
         if (errMsg.indexOf("daily") !== -1 || errMsg.indexOf("limit") !== -1) {
-          var hint = retrySec > 0 ? " (resets in " + Math.ceil(retrySec / 3600) + "h)" : "";
-          return errResp(429, errMsg + hint);
+          dailyLimitHit = true;
+          break; // Exit direct attempts, go to relay phase
         }
 
         // Temporary rate limit - try fresh token
@@ -545,7 +608,57 @@ async function handleRequest(request, env) {
       }
     }
 
-    return errResp(429, "Rate limited. Try again later.");
+    // Phase 2: Daily limit hit on direct - try relay Workers (different edge nodes = different IPs)
+    if (dailyLimitHit && relays.length > 0) {
+      for (var ri = 0; ri < relays.length; ri++) {
+        try {
+          var relayResult = await relayFetch(relays[ri], clawReq, relaySecret);
+          var rd = relayResult.data;
+
+          // Relay success
+          if (relayResult.status === 200 && !rd.error && rd.images && rd.images.length) {
+            var billing2 = rd.billing || {};
+            var resultData2 = rd.images.map(function(img) {
+              return { url: img.url || ("data:image/png;base64," + img.b64_json) };
+            });
+            return jsonResp({
+              created: Math.floor(Date.now() / 1000),
+              data: resultData2,
+              model: model
+            }, 200, Object.assign({
+              "X-Claw-Model": billing2.model || model,
+              "X-Claw-Cost": String(billing2.usd || 0),
+              "X-Claw-Note": billing2.note || "",
+              "X-Claw-Edge": "relay-" + (ri + 1)
+            }, C));
+          }
+
+          // Relay also daily limited - try next relay
+          var relayErr = "";
+          if (rd.error) {
+            relayErr = (typeof rd.error === "string") ? rd.error : (rd.error.message || JSON.stringify(rd.error));
+          } else {
+            relayErr = "HTTP " + relayResult.status;
+          }
+          lastErr = relayErr;
+          continue;
+
+        } catch(e) {
+          lastErr = "Relay error: " + e.message;
+          continue;
+        }
+      }
+    }
+
+    // All attempts exhausted
+    var retrySec2 = 0;
+    if (lastErr.indexOf("resets in") !== -1) {
+      var m = lastErr.match(/resets in (\d+)h/);
+      if (m) retrySec2 = parseInt(m[1]) * 3600;
+    }
+    var hint2 = retrySec2 > 0 ? " (resets in " + Math.ceil(retrySec2 / 3600) + "h)" : "";
+    var relayInfo = relays.length > 0 ? " (" + relays.length + " relays tried)" : "";
+    return errResp(429, lastErr + hint2 + relayInfo);
   }
 
   return errResp(404, "Not found");

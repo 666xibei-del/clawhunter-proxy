@@ -16,6 +16,8 @@ OpenAI Compatible API Proxy with Web UI, deployed on Cloudflare Workers.
 - ✅ **Aspect Ratio Selection** - 1:1, 16:9, 9:16, 4:3, 3:4 / 選擇寬高比
 - ✅ **3 Free Models** - All completely free / 3 個完全免費模型
 - ✅ **Token Pool** - Auto-refresh with retry on rate limit / 自動刷新 Token + 限流重試
+- ✅ **IP Rotation** - Multi-platform relay for unlimited quota / 多平台代理輪詢繞過限流
+- ✅ **Free Platform Relays** - Vercel + Deno + Netlify (all free) / 免費平台代理中轉
 - ✅ **Global CDN** - CF Workers 200+ edge nodes / 全球邊緣節點
 - ✅ **Dark Theme** - Modern dark UI / 現代暗色主題
 
@@ -265,6 +267,50 @@ Return Result (base64 or URL)
 
 ---
 
+## 🔄 IP Rotation / IP 輪詢
+
+When CF Worker's IP hits daily limit, automatically rotate through free platform relays:  
+當 CF Worker IP 用完每日配額時，自動輪詢免費平台代理：
+
+```
+User → Main Worker (CF Edge A)
+         ↓ Direct (if OK)
+         clawhunter.fun
+         ↓ Daily limit? →
+         Relay 1 (Vercel Edge)    → clawhunter.fun ✅
+         Relay 2 (Deno Deploy)    → clawhunter.fun ✅
+         Relay 3 (Netlify Edge)   → clawhunter.fun ✅
+         Relay 4 (CF Account 2)   → clawhunter.fun ✅
+```
+
+### Free Platform Quota / 免費平台額度
+
+| Platform | Free Tier | Edge Locations | Credit Card |
+|---|---|---|---|
+| **Cloudflare Workers** | 100K req/day | 200+ | No |
+| **Vercel Edge** | 100GB bandwidth/month | 30+ | No |
+| **Deno Deploy** | 100GB bandwidth/month | 35+ | No |
+| **Netlify Edge** | 125K requests/month | 10+ | No |
+
+### Quick Setup / 快速設置
+
+```bash
+# Deploy relays to all free platforms
+./deploy-relays.sh all
+
+# Get RELAY_URLS configuration
+./deploy-relays.sh config
+
+# Set on main Worker
+echo "https://app.vercel.app/relay,https://app.deno.dev/relay" | npx wrangler secret put RELAY_URLS
+npx wrangler deploy
+
+# Check relay health
+./deploy-relays.sh status
+```
+
+---
+
 ## ⚠️ Notes / 注意事項
 
 1. **Free Tier**: Claw Hunter has daily free limits per IP / 每 IP 每日免費額度有限
@@ -272,7 +318,8 @@ Return Result (base64 or URL)
 3. **Token Pool**: Auto-maintained, 12h expiry / 自動維護，12 小時過期
 4. **Image Size**: Results may be large (100KB-3MB) / 返回圖片可能較大
 5. **Upload Limit**: Max 10MB per image, max 4 images / 每張最大 10MB，最多 4 張
-6. **Rate Limit**: Auto-retry with backoff, shows reset time / 自動重試+退避，顯示重置時間
+6. **Rate Limit**: Auto-retry with relay rotation / 自動重試 + 代理輪詢
+7. **IP Rotation**: Deploy relays on free platforms for more quota / 部署免費平台代理增加額度
 
 ---
 
@@ -280,13 +327,18 @@ Return Result (base64 or URL)
 
 ```
 clawhunter-proxy/
-├── src/index.js      # Worker code (590 lines) - HTML/CSS/JS + API proxy
-├── wrangler.toml     # CF Workers config
-├── package.json      # Dependencies
-├── deploy.sh         # Deploy script
-├── test.py           # API test script
-├── batch_generate.py # Batch generation script
-└── README.md         # This file
+├── src/index.js          # Main Worker (676 lines)
+├── relay.js              # CF Worker relay template
+├── relays/
+│   ├── vercel/           # Vercel Edge relay
+│   ├── deno/             # Deno Deploy relay
+│   └── netlify/          # Netlify Edge relay
+├── deploy-relays.sh      # One-click deploy to all platforms
+├── deploy-multi.sh       # Multi CF account deploy
+├── wrangler.toml         # CF Workers config
+├── wrangler-relay.toml   # Relay Worker config
+├── batch_generate.py     # Batch generation script
+└── README.md
 ```
 
 ## 📄 License / 授權
