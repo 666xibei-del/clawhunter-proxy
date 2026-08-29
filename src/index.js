@@ -8,28 +8,106 @@ var BASE = "https://clawhunter.fun";
 var TOKEN_URL = BASE + "/api/v1/studio/token";
 var IMAGE_URL = BASE + "/api/studio/images";
 
-// Relay pool: each relay is a Worker on a different CF account/edge node
-// Set RELAY_URLS env var as comma-separated list of relay Worker URLs
-// e.g. "https://relay1.account1.workers.dev,https://relay2.account2.workers.dev"
-// Relay secret must match RELAY_SECRET on relay Workers
-var DEFAULT_RELAYS = [];
+// ============ Dynamic Relay Pool (KV-persisted) ============
+// Relay pool supports:
+// 1. RELAY_URLS env var (comma-separated)
+// 2. /admin/add-relay API (persisted to KV)
+// 3. /admin/remove-relay API
+// Each relay = different platform/account = different IP = independent quota
+var KV_KEY = "relay-pool";
+var KV_HEALTH_KEY = "relay-health";
+var inMemoryRelays = [];
+var relayHealth = {};
 
-function getRelayPool(env) {
-  if (env && env.RELAY_URLS) {
-    return env.RELAY_URLS.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+async function loadRelays(env) {
+  if (env && env.RELAY_POOL) {
+    try {
+      var data = await env.RELAY_POOL.get(KV_KEY, "json");
+      if (data && Array.isArray(data)) inMemoryRelays = data;
+      var health = await env.RELAY_POOL.get(KV_HEALTH_KEY, "json");
+      if (health) relayHealth = health;
+    } catch(e) {}
   }
-  return DEFAULT_RELAYS;
+}
+
+async function saveRelays(env) {
+  if (env && env.RELAY_POOL) {
+    try {
+      await env.RELAY_POOL.put(KV_KEY, JSON.stringify(inMemoryRelays));
+      await env.RELAY_POOL.put(KV_HEALTH_KEY, JSON.stringify(relayHealth));
+    } catch(e) {}
+  }
+}
+
+async function getRelayPool(env) {
+  await loadRelays(env);
+  var envRelays = [];
+  if (env && env.RELAY_URLS) {
+    envRelays = env.RELAY_URLS.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+  }
+  var seen = {};
+  var merged = [];
+  envRelays.concat(inMemoryRelays).forEach(function(url) {
+    if (!seen[url]) { seen[url] = true; merged.push(url); }
+  });
+  return merged;
+}
+
+async function addRelay(env, url) {
+  await loadRelays(env);
+  url = url.trim().replace(/\/$/, "");
+  if (inMemoryRelays.indexOf(url) === -1) {
+    inMemoryRelays.push(url);
+    relayHealth[url] = { ok: true, lastCheck: 0, errors: 0 };
+    await saveRelays(env);
+    return true;
+  }
+  return false;
+}
+
+async function removeRelay(env, url) {
+  await loadRelays(env);
+  var idx = inMemoryRelays.indexOf(url);
+  if (idx !== -1) {
+    inMemoryRelays.splice(idx, 1);
+    delete relayHealth[url];
+    await saveRelays(env);
+    return true;
+  }
+  return false;
+}
+
+function markRelayBad(url) {
+  if (relayHealth[url]) {
+    relayHealth[url].errors++;
+    relayHealth[url].ok = relayHealth[url].errors < 3;
+  }
+}
+
+function markRelayGood(url) {
+  if (relayHealth[url]) {
+    relayHealth[url].errors = 0;
+    relayHealth[url].ok = true;
+    relayHealth[url].lastCheck = Date.now();
+  }
+}
+
+// Shuffle array (Fisher-Yates)
+function shuffle(arr) {
+  for (var i = arr.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1));
+    var tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+  }
+  return arr;
 }
 
 async function relayFetch(relayUrl, clawReq, secret) {
   var headers = { "Content-Type": "application/json" };
   if (secret) headers["X-Relay-Token"] = secret;
-  // Support both raw URLs and URLs with /relay suffix
   var endpoint = relayUrl;
   if (!endpoint.endsWith("/relay") && !endpoint.endsWith("/api/relay")) {
     endpoint = endpoint + "/relay";
   }
-  // Timeout after 25 seconds (CF Worker limit is 30s)
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, 25000);
   try {
@@ -328,9 +406,17 @@ function getClientJS() {
   L.push("    preview.innerHTML = '';");
   L.push("    var ph = document.createElement('div');");
   L.push("    ph.className = 'placeholder';");
-  L.push("    ph.innerHTML = '<div class=\"icon\">Error</div><p>' + e.message + '</p>';");
+  L.push("    var errMsg = e.message || 'Unknown error';");
+  L.push("    var errHTML = '<div class=\"icon\">Error</div><p>' + errMsg + '</p>';");
+  L.push("    if (errMsg.indexOf('daily') !== -1 || errMsg.indexOf('limit') !== -1) {");
+  L.push("      errHTML += '<p style=\"margin-top:12px;font-size:12px;color:var(--muted)\">' +");
+  L.push("        'This IP has used its daily free quota.<br>' +");
+  L.push("        'Deploy relays for more IPs: <code>./deploy-relays.sh all</code><br>' +");
+  L.push("        'Or wait for quota to reset (~23h).</p>';");
+  L.push("    }");
+  L.push("    ph.innerHTML = errHTML;");
   L.push("    preview.appendChild(ph);");
-  L.push("    showStatus('Error: ' + e.message, 'err');");
+  L.push("    showStatus('Error: ' + errMsg, 'err');");
   L.push("  } finally {");
   L.push("    btn.disabled = false;");
   L.push("    btn.innerHTML = refImage ? 'Edit Image' : 'Generate';");
@@ -469,22 +555,29 @@ async function handleRequest(request, env) {
 
   if (url.pathname === "/health") {
     try {
-      await getToken();
-      var relays = getRelayPool(env);
-      var platforms = relays.map(function(r) {
-        if (r.indexOf("vercel.app") !== -1) return "vercel";
-        if (r.indexOf("deno.dev") !== -1) return "deno";
-        if (r.indexOf("netlify.app") !== -1) return "netlify";
-        if (r.indexOf("workers.dev") !== -1) return "cf-worker";
-        return "custom";
+      // Token pool status
+      var poolCount = 0;
+      try { await getToken(); poolCount = pool ? pool.length : 0; } catch(e1) {}
+      // Relay pool status
+      var relayUrls = [];
+      try { relayUrls = await getRelayPool(env); } catch(e2) {}
+      if (!relayUrls) relayUrls = [];
+      var platformCount = {};
+      relayUrls.forEach(function(r) {
+        var p = "custom";
+        if (r.indexOf("vercel.app") !== -1) p = "vercel";
+        else if (r.indexOf("deno.dev") !== -1) p = "deno";
+        else if (r.indexOf("netlify.app") !== -1) p = "netlify";
+        else if (r.indexOf("workers.dev") !== -1) p = "cf-worker";
+        platformCount[p] = (platformCount[p] || 0) + 1;
       });
       return jsonResp({
         status: "ok",
-        token_pool: pool.length,
-        relays: relays.length,
-        platforms: platforms,
-        edge_nodes: "direct + " + relays.length + " relays",
-        models: MODELS.map(function(m) { return m.id; })
+        token_pool: poolCount,
+        relays: relayUrls.length,
+        platforms: platformCount,
+        edge_nodes: "direct + " + relayUrls.length + " relays",
+        models: ["gpt-image-2", "nano-banana-2", "kling-v3"]
       }, 200, C);
     } catch(e) {
       return jsonResp({ status: "error", msg: e.message }, 503, C);
@@ -494,6 +587,46 @@ async function handleRequest(request, env) {
   if (url.pathname === "/admin/refresh-tokens" && request.method === "POST") {
     await refreshPool(3);
     return jsonResp({ status: "ok", pool_size: pool.length }, 200, C);
+  }
+
+  // ============ Relay Pool Management ============
+  if (url.pathname === "/admin/add-relay" && request.method === "POST") {
+    var rb;
+    try { rb = await request.json(); } catch(e) { return errResp(400, "Invalid JSON"); }
+    var relayUrl = rb.url || rb.relay;
+    if (!relayUrl) return errResp(400, "Missing 'url' field");
+    var added = await addRelay(env, relayUrl);
+    var pool = await getRelayPool(env);
+    return jsonResp({ status: added ? "added" : "exists", relays: pool, count: pool.length }, 200, C);
+  }
+
+  if (url.pathname === "/admin/remove-relay" && request.method === "POST") {
+    var rb2;
+    try { rb2 = await request.json(); } catch(e) { return errResp(400, "Invalid JSON"); }
+    var removed = await removeRelay(env, rb2.url || rb2.relay || "");
+    var pool2 = await getRelayPool(env);
+    return jsonResp({ status: removed ? "removed" : "not_found", relays: pool2, count: pool2.length }, 200, C);
+  }
+
+  if (url.pathname === "/admin/relays") {
+    var allRelays = await getRelayPool(env);
+    var healthInfo = allRelays.map(function(r) {
+      var h = relayHealth[r] || { ok: true, errors: 0, lastCheck: 0 };
+      return { url: r, ok: h.ok, errors: h.errors, lastCheck: h.lastCheck };
+    });
+    return jsonResp({ relays: healthInfo, count: allRelays.length }, 200, C);
+  }
+
+  if (url.pathname === "/admin/batch-relays" && request.method === "POST") {
+    var rb3;
+    try { rb3 = await request.json(); } catch(e) { return errResp(400, "Invalid JSON"); }
+    var urls = rb3.urls || [];
+    var addedCount = 0;
+    for (var bi = 0; bi < urls.length; bi++) {
+      if (await addRelay(env, urls[bi])) addedCount++;
+    }
+    var pool3 = await getRelayPool(env);
+    return jsonResp({ status: "ok", added: addedCount, total: pool3.length, relays: pool3 }, 200, C);
   }
 
   if (url.pathname === "/v1/models") {
@@ -563,8 +696,8 @@ async function handleRequest(request, env) {
       }
     }
 
-    // Collect relay pool from env
-    var relays = getRelayPool(env);
+    // Collect relay pool from env + KV
+    var relays = await getRelayPool(env);
     var relaySecret = (env && env.RELAY_SECRET) || "";
     var lastErr = "";
     var dailyLimitHit = false;
@@ -644,15 +777,20 @@ async function handleRequest(request, env) {
       }
     }
 
-    // Phase 2: Daily limit hit on direct - try relay Workers (different edge nodes = different IPs)
+    // Phase 2: Daily limit hit on direct - try relay Workers (shuffled for load balancing)
     if (dailyLimitHit && relays.length > 0) {
-      for (var ri = 0; ri < relays.length; ri++) {
+      var shuffledRelays = shuffle(relays.slice());
+      for (var ri = 0; ri < shuffledRelays.length; ri++) {
+        var relayUrl = shuffledRelays[ri];
+        // Skip relays marked as bad
+        if (relayHealth[relayUrl] && !relayHealth[relayUrl].ok) continue;
         try {
-          var relayResult = await relayFetch(relays[ri], clawReq, relaySecret);
+          var relayResult = await relayFetch(relayUrl, clawReq, relaySecret);
           var rd = relayResult.data;
 
           // Relay success
           if (relayResult.status === 200 && !rd.error && rd.images && rd.images.length) {
+            markRelayGood(relayUrl);
             var billing2 = rd.billing || {};
             var resultData2 = rd.images.map(function(img) {
               if (img.url) return { url: img.url };
@@ -679,7 +817,8 @@ async function handleRequest(request, env) {
             }, C));
           }
 
-          // Relay also daily limited - try next relay
+          // Relay also failed - mark as bad and try next
+          markRelayBad(relayUrl);
           var relayErr = "";
           if (rd.error) {
             relayErr = (typeof rd.error === "string") ? rd.error : (rd.error.message || JSON.stringify(rd.error));
@@ -690,21 +829,31 @@ async function handleRequest(request, env) {
           continue;
 
         } catch(e) {
+          markRelayBad(relayUrl);
           lastErr = "Relay error: " + e.message;
           continue;
         }
       }
     }
 
-    // All attempts exhausted
+    // All attempts exhausted - provide helpful error with relay setup guide
     var retrySec2 = 0;
     if (lastErr.indexOf("resets in") !== -1) {
       var m = lastErr.match(/resets in (\d+)h/);
       if (m) retrySec2 = parseInt(m[1]) * 3600;
     }
-    var hint2 = retrySec2 > 0 ? " (resets in " + Math.ceil(retrySec2 / 3600) + "h)" : "";
-    var relayInfo = relays.length > 0 ? " (" + relays.length + " relays tried)" : "";
-    return errResp(429, lastErr + hint2 + relayInfo);
+    var resetTime = retrySec2 > 0 ? Math.ceil(retrySec2 / 3600) + "h" : "~23h";
+    var relayCount = relays.length;
+    var helpMsg = lastErr;
+    if (retrySec2 > 0) {
+      helpMsg += " — resets in " + resetTime;
+    }
+    if (relayCount === 0) {
+      helpMsg += ". Deploy relays for more IPs: ./deploy-relays.sh all";
+    } else {
+      helpMsg += " (" + relayCount + " relays also limited)";
+    }
+    return errResp(429, helpMsg);
   }
 
   return errResp(404, "Not found");
