@@ -40,15 +40,16 @@ async function saveRelays(env) {
 }
 
 async function getRelayPool(env) {
-  await loadRelays(env);
+  try { await loadRelays(env); } catch(e) {}
   var envRelays = [];
   if (env && env.RELAY_URLS) {
     envRelays = env.RELAY_URLS.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
   }
+  var memRelays = Array.isArray(inMemoryRelays) ? inMemoryRelays : [];
   var seen = {};
   var merged = [];
-  envRelays.concat(inMemoryRelays).forEach(function(url) {
-    if (!seen[url]) { seen[url] = true; merged.push(url); }
+  envRelays.concat(memRelays).forEach(function(url) {
+    if (url && !seen[url]) { seen[url] = true; merged.push(url); }
   });
   return merged;
 }
@@ -697,7 +698,9 @@ async function handleRequest(request, env) {
     }
 
     // Collect relay pool from env + KV
-    var relays = await getRelayPool(env);
+    var relays = [];
+    try { relays = await getRelayPool(env); } catch(e0) {}
+    if (!Array.isArray(relays)) relays = [];
     var relaySecret = (env && env.RELAY_SECRET) || "";
     var lastErr = "";
     var dailyLimitHit = false;
@@ -705,6 +708,7 @@ async function handleRequest(request, env) {
     // Phase 1: Try direct requests (up to 3 attempts with fresh tokens)
     for (var attempt = 0; attempt < 3; attempt++) {
       try {
+        if (!Array.isArray(pool)) pool = [];
         if (pool.length < 2) await refreshPool(3);
         var tok = await getToken();
         var clawResp = await fetch(IMAGE_URL, {
@@ -713,12 +717,15 @@ async function handleRequest(request, env) {
           body: JSON.stringify(clawReq)
         });
 
-        var clawData = await clawResp.json().catch(function() { return {}; });
+        var clawData = await clawResp.json().catch(function() { return {};
+        });
+        if (!clawData) clawData = {};
 
         // Success
-        if (clawResp.ok && !clawData.error && clawData.images && clawData.images.length) {
+        var images = clawData.images || [];
+        if (clawResp.ok && !clawData.error && images.length > 0) {
           var billing = clawData.billing || {};
-          var resultData = clawData.images.map(function(img) {
+          var resultData = images.map(function(img) {
             if (img.url) return { url: img.url };
             // Detect actual image format from base64 data
             var b64 = img.b64_json || "";
@@ -789,10 +796,11 @@ async function handleRequest(request, env) {
           var rd = relayResult.data;
 
           // Relay success
-          if (relayResult.status === 200 && !rd.error && rd.images && rd.images.length) {
+          var rdImages = rd.images || [];
+          if (relayResult.status === 200 && !rd.error && rdImages.length > 0) {
             markRelayGood(relayUrl);
             var billing2 = rd.billing || {};
-            var resultData2 = rd.images.map(function(img) {
+            var resultData2 = rdImages.map(function(img) {
               if (img.url) return { url: img.url };
               var b64r = img.b64_json || "";
               var mime2 = "image/png";
