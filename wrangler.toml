@@ -29,10 +29,7 @@ compatibility_flags = ["nodejs_compat"]
 # RELAY_URLS = ""       # 逗號分隔的 Relay Worker URL 列表
 # RELAY_SECRET = ""     # 共享密鑰 (必須與 Relay Worker 一致)
 
-# KV Namespace for relay pool persistence
-[[kv_namespaces]]
-binding = "RELAY_POOL"
-id = "bee50014c00f411f9b1b2389f508a968"
+
 
 # 自定義域名 (可選)
 # [routes]
