@@ -648,8 +648,8 @@ async function handleRequest(request, env) {
     var relayUrl = rb.url || rb.relay;
     if (!relayUrl) return errResp(400, "Missing 'url' field");
     var added = await addRelay(env, relayUrl);
-    var pool = await getRelayPool(env);
-    return jsonResp({ status: added ? "added" : "exists", relays: pool, count: pool.length }, 200, C);
+    var relayPoolList = await getRelayPool(env);
+    return jsonResp({ status: added ? "added" : "exists", relays: relayPoolList, count: relayPoolList.length }, 200, C);
   }
 
   if (url.pathname === "/admin/remove-relay" && request.method === "POST") {
