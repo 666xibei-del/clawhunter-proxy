@@ -599,7 +599,16 @@ async function handleRequest(request, env) {
     try {
       // Token pool status
       var poolCount = 0;
-      try { await getToken(); poolCount = pool ? pool.length : 0; } catch(e1) {}
+      var tokenError = null;
+
+      try {
+        await getToken();
+        poolCount = pool ? pool.length : 0;
+      } catch (e1) {
+        tokenError = e1 && e1.message
+          ? e1.message
+          : String(e1);
+      }
       // Relay pool status
       var relayUrls = [];
       try { relayUrls = await getRelayPool(env); } catch(e2) {}
