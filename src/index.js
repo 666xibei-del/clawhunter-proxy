@@ -137,15 +137,56 @@ var pool = [];
 
 async function getToken() {
   var now = Date.now() / 1000 | 0;
-  pool = pool.filter(function(t) { return t.exp - 120 > now; });
+
+  pool = pool.filter(function(t) {
+    return t.exp - 120 > now;
+  });
+
   if (pool.length > 0) {
-    pool.sort(function(a, b) { return a.used - b.used; });
+    pool.sort(function(a, b) {
+      return a.used - b.used;
+    });
+
     pool[0].used = now;
     return pool[0].tok;
   }
-  var r = await fetch(TOKEN_URL);
-  var d = await r.json();
-  pool.push({ tok: d.token, exp: d.expiresAt, used: now });
+
+  var r = await fetch(TOKEN_URL, {
+    headers: {
+      "Accept": "application/json"
+    }
+  });
+
+  var text = await r.text();
+
+  if (!r.ok) {
+    throw new Error(
+      "Token HTTP " + r.status + ": " + text.slice(0, 200)
+    );
+  }
+
+  var d;
+
+  try {
+    d = JSON.parse(text);
+  } catch (e) {
+    throw new Error(
+      "Token接口返回的不是JSON: " + text.slice(0, 200)
+    );
+  }
+
+  if (!d.token) {
+    throw new Error(
+      "Token接口没有返回token: " + text.slice(0, 200)
+    );
+  }
+
+  pool.push({
+    tok: d.token,
+    exp: d.expiresAt,
+    used: now
+  });
+
   return d.token;
 }
 
