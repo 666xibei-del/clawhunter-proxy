@@ -625,6 +625,7 @@ async function handleRequest(request, env) {
       return jsonResp({
         status: "ok",
         token_pool: poolCount,
+        token_error: tokenError,
         relays: relayUrls.length,
         platforms: platformCount,
         edge_nodes: "direct + " + relayUrls.length + " relays",
